@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "leaflet/dist/leaflet.css";   // ✅ SEUL endroit où on importe cette CSS
 import TopNavbar from "@/components/TopNavbar";
 
 export const metadata: Metadata = {
