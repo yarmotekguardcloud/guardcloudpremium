@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import "leaflet/dist/leaflet.css";
-
 import TopNavbar from "@/components/TopNavbar";
 
 export const metadata: Metadata = {
-  title: "Yarmotek GuardCloud Premium",
-  description: "Suivi temps réel multi-clients et multi-revendeurs Yarmotek",
+  title: "Yarmotek GuardCloud – Premium 2025",
+  description:
+    "Yarmotek GuardCloud – Universal Tracking • Phones • PC • Drones • GPS • IoT.",
 };
 
 export default function RootLayout({
@@ -16,16 +15,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="fr">
-      <body className="bg-[#05060f] text-white min-h-screen flex flex-col">
-
-        {/* 🔥 Barre JWT */}
+      <body className="bg-slate-950 text-white">
         <TopNavbar />
-
-        {/* 🔥 Zone principale */}
-        <main className="flex-1 px-6 py-6">
-          {children}
-        </main>
-
+        {children}
       </body>
     </html>
   );

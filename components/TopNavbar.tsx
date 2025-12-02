@@ -1,83 +1,66 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
+import Image from "next/image";
 import { jwtDecode } from "jwt-decode";
 
-export default function TopNavbar() {
+const TopNavbar = () => {
   const [jwt, setJwt] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
-  const [lang, setLang] = useState<"fr" | "en">("fr");
 
   useEffect(() => {
     const stored = localStorage.getItem("YGC_JWT");
-    if (stored) {
-      setJwt(stored);
-      try {
-        const decoded: any = jwtDecode(stored);
-        setRole(decoded.role || null);
-        if (decoded.lang) setLang(decoded.lang);
-      } catch {}
+    if (!stored) return;
+    setJwt(stored);
+
+    try {
+      const decoded: any = jwtDecode(stored);
+      setRole(decoded.role || null);
+    } catch {
+      // ignore
     }
   }, []);
 
-  const logout = () => {
-    localStorage.removeItem("YGC_JWT");
-    window.location.href = "/admin/login";
-  };
-
   return (
-    <nav className="w-full bg-slate-900 text-white px-6 py-3 flex justify-between items-center shadow-xl">
-      <Link href="/">
-        <span className="text-xl font-bold">Yarmotek GuardCloud</span>
-      </Link>
+    <div className="w-full bg-slate-950 border-b border-slate-800 px-6 py-3 flex items-center justify-between">
+      {/* LEFT : Logo + Branding */}
+      <div className="flex items-center gap-3">
 
-      <div className="flex items-center gap-6">
-        {/* Appareils */}
-        <Link href="/map/devices" className="hover:text-emerald-400">
-          {lang === "fr" ? "Appareils" : "Devices"}
-        </Link>
+        {/* Logo rond Yarmotek */}
+        <div className="w-11 h-11 rounded-full overflow-hidden border border-slate-700 bg-slate-900 flex items-center justify-center">
+          <Image
+            src="/logo-yarmotek.png"
+            alt="Yarmotek Logo"
+            width={44}
+            height={44}
+            className="object-cover"
+          />
+        </div>
 
-        {/* Facturation visibles pour SUPER_ADMIN / ADMIN / RESELLER */}
-        {["SUPER_ADMIN", "ADMIN", "RESELLER"].includes(role || "") && (
-          <Link href="/billing" className="hover:text-emerald-400">
-            {lang === "fr" ? "Facturation" : "Billing"}
-          </Link>
-        )}
+        <div className="flex flex-col leading-tight">
+          <span className="font-semibold text-base text-slate-200 tracking-tight">
+            YARMOTEK <span className="text-amber-400">GUARDCLOUD</span>
+          </span>
 
-        {/* Langue */}
-        <select
-          value={lang}
-          onChange={(e) => setLang(e.target.value as any)}
-          className="bg-slate-800 border border-slate-700 px-2 py-1 rounded"
-        >
-          <option value="fr">FR</option>
-          <option value="en">EN</option>
+          <span className="text-[11px] text-slate-400">
+            UNIVERSAL TRACKING • PHONES • PC • DRONES • GPS • IOT
+          </span>
+        </div>
+      </div>
+
+      {/* RIGHT : Boutons */}
+      <div className="flex items-center gap-3">
+        <select className="bg-slate-900 text-slate-200 border border-slate-700 text-xs px-2 py-1 rounded">
+          <option value="FR">FR</option>
+          <option value="EN">EN</option>
         </select>
 
-        {/* Connexion / Déconnexion */}
-        {!jwt ? (
-          <button
-            onClick={() => {
-              const token = prompt("Collez votre JWT :");
-              if (token) {
-                localStorage.setItem("YGC_JWT", token);
-                window.location.reload();
-              }
-            }}
-            className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-black rounded"
-          >
-            Coller un JWT
-          </button>
-        ) : (
-          <button
-            onClick={logout}
-            className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded"
-          >
-            {lang === "fr" ? "Déconnexion" : "Logout"}
-          </button>
-        )}
+        <button className="bg-emerald-500 hover:bg-emerald-400 text-black text-xs px-4 py-1.5 rounded font-semibold">
+          Coller un JWT
+        </button>
       </div>
-    </nav>
+    </div>
   );
-}
+};
+
+export default TopNavbar;

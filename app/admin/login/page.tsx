@@ -1,146 +1,118 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+// app/admin/login/page.tsx
+// MODE SUPER ADMIN DEV : pas de vérification API, on entre directement.
+
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const ADMIN_TOKEN_KEY = "gc_admin_token";
 
-export default function Login() {
+function saveAdminToken(token: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
+}
+
+function clearAdminToken() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+}
+
+export default function AdminLoginPage() {
   const router = useRouter();
+  const [email, setEmail] = useState("admin@yarmotek.com");
+  const [password, setPassword] = useState("YGC-ADMIN");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    setError(null);
+    setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/admin/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      // 🔥 MODE SUPER ADMIN DEV
+      // On ne contacte pas l'API, on force la connexion locale.
+      clearAdminToken();
+      saveAdminToken("YGC-ADMIN"); // token forcé
 
-      const data = await res.json();
-
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Identifiants incorrects");
-      }
-
-      // Token admin
-      if (data.token) {
-        localStorage.setItem("gc_token", data.token);
-      }
-
-      // Redirection vers tableau de bord
-      router.push("/map/devices");
-    } catch (e: any) {
-      setError(e.message ?? "Erreur de connexion");
+      // Redirection directe vers la vue admin globale
+      await router.push("/admin/devices");
+    } catch (err: any) {
+      console.error("Admin login error:", err);
+      setError(err.message || "Erreur de connexion");
+      clearAdminToken();
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#020617",
-        color: "white",
-      }}
-    >
-      <div
-        style={{
-          width: 360,
-          padding: 24,
-          borderRadius: 12,
-          background: "#0b1120",
-          boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
-        }}
-      >
-        <h1 style={{ fontSize: 24, marginBottom: 12, fontWeight: 600 }}>
-          Yarmotek GuardCloud
-        </h1>
+    <div className="min-h-screen bg-gray-100 flex flex-col">
+      {/* Header global simple – adapte si tu as déjà une nav dans ton layout */}
+      <nav className="bg-[#05060f] text-white h-14 flex items-center justify-between px-6">
+        <div className="font-semibold text-lg">Yarmotek GuardCloud</div>
+        <div className="text-xs opacity-70">
+          Mode Super Admin (DEV – accès direct)
+        </div>
+      </nav>
 
-        <p style={{ marginBottom: 20, fontSize: 14, opacity: 0.8 }}>
-          Admin login (YGC-ADMIN ou compte client)
-        </p>
+      <main className="flex-1 flex items-center justify-center">
+        <div className="max-w-md w-full bg-white shadow-lg rounded-2xl p-8">
+          <h1 className="text-xl font-semibold mb-1">
+            Connexion Admin – Yarmotek GuardCloud
+          </h1>
+          <p className="text-xs text-gray-500 mb-6">
+            Mode développement : accès direct Super Admin (YGC-ADMIN),
+            sans vérification serveur.
+          </p>
 
-        <form onSubmit={handleSubmit}>
-          {/* Champ identifiant */}
-          <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
-            Identifiant
-          </label>
-          <input
-            type="text"     // ✔ Correction ici
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{
-              width: "100%",
-              padding: "8px 10px",
-              marginBottom: 12,
-              borderRadius: 6,
-              border: "1px solid #1f2937",
-              background: "#020617",
-              color: "white",
-            }}
-            placeholder="YGC-ADMIN"
-          />
-
-          {/* Champ mot de passe */}
-          <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
-            Mot de passe
-          </label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{
-              width: "100%",
-              padding: "8px 10px",
-              marginBottom: 16,
-              borderRadius: 6,
-              border: "1px solid #1f2937",
-              background: "#020617",
-              color: "white",
-            }}
-            placeholder="Mot de passe"
-          />
-
-          {error && (
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: 13,
-                color: "#f87171",
-              }}
-            >
-              {error}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm mb-1">
+                Email administrateur
+              </label>
+              <input
+                type="email"
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+              />
             </div>
-          )}
 
-          <button
-            type="submit"
-            style={{
-              width: "100%",
-              padding: "10px 14px",
-              borderRadius: 6,
-              border: "none",
-              background: "#22c55e",
-              color: "#0f172a",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Se connecter
-          </button>
-        </form>
-      </div>
-    </main>
+            <div>
+              <label className="block text-sm mb-1">Mot de passe</label>
+              <input
+                type="password"
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+
+            {error && (
+              <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2.5 rounded-lg transition disabled:opacity-60"
+            >
+              {loading ? "Connexion..." : "Se connecter"}
+            </button>
+          </form>
+
+          <p className="mt-4 text-[11px] text-gray-400 text-center">
+            Propulsé par Yarmotek GuardCloud – Supervision drones, PC &
+            smartphones.
+          </p>
+        </div>
+      </main>
+    </div>
   );
 }
