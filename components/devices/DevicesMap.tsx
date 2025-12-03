@@ -9,7 +9,6 @@ export type DeviceMapItem = {
   name?: string;
   clientName?: string;
 
-  // lat / lng peuvent être number | null | undefined
   lat?: number | null;
   lng?: number | null;
 
@@ -24,38 +23,33 @@ type DevicesMapProps = {
 
 const defaultCenter: [number, number] = [12.3657, -1.5339]; // Ouagadougou
 
-// ✅ Icône par défaut Leaflet, via URLs publiques (pas d'import d’images locales)
+// =====================================================
+//  Icône Leaflet via CDN (pas d'import d'images locales)
+// =====================================================
 const defaultIcon = L.icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
   iconRetinaUrl:
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
   shadowSize: [41, 41],
 });
 
-// ⚙️ On applique cette icône par défaut à tous les markers
 L.Marker.prototype.options.icon = defaultIcon;
 
 export default function DevicesMap({ devices }: DevicesMapProps) {
-  // On garde seulement les devices avec des coordonnées valides
   const validDevices = useMemo(
     () =>
       (devices || []).filter((d) => {
-        const hasLat =
-          typeof d.lat === "number" && !Number.isNaN(d.lat);
-        const hasLng =
-          typeof d.lng === "number" && !Number.isNaN(d.lng);
-        return hasLat && hasLng;
+        const latOK = typeof d.lat === "number" && !Number.isNaN(d.lat);
+        const lngOK = typeof d.lng === "number" && !Number.isNaN(d.lng);
+        return latOK && lngOK;
       }),
     [devices]
   );
 
-  // Centre : premier device valide ou centre par défaut
   const center = useMemo<[number, number]>(() => {
     if (validDevices.length > 0) {
       return [
@@ -102,23 +96,20 @@ export default function DevicesMap({ devices }: DevicesMapProps) {
 
                 {typeof d.battery === "number" && (
                   <div>
-                    <b>Batterie :</b> {d.battery}%
+                    <b>Batterie :</b> {d.battery}% 
                   </div>
                 )}
 
                 {d.lastHeartbeat && (
                   <div>
                     <b>Dernier HB :</b>{" "}
-                    {new Date(d.lastHeartbeat).toLocaleString(
-                      "fr-FR",
-                      {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      }
-                    )}
+                    {new Date(d.lastHeartbeat).toLocaleString("fr-FR", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </div>
                 )}
               </div>
