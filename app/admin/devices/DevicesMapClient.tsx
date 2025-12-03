@@ -47,7 +47,7 @@ const DefaultIcon = L.icon({
   iconSize: [25, 41],
   iconAnchor: [12, 41],
 });
-L.Marker.prototype.options.icon = DefaultIcon;
+(L.Marker as any).prototype.options.icon = DefaultIcon;
 
 export default function DevicesMapClient() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -58,7 +58,6 @@ export default function DevicesMapClient() {
 
   const center: LatLngTuple = [12.3657, -1.5339]; // Ouaga
 
-  // lecture champ "dernier update" compatible avec tous les formats
   const lastUpdateText = (d: Device) =>
     d.updatedAt ||
     d.lastUpdatedAt ||
