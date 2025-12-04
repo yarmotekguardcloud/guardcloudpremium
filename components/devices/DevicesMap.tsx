@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Popup,
-  LayersControl,
-} from "react-leaflet";
-import L from "leaflet";
+import { useEffect, useState } from "react";
 
 type Device = {
   deviceId: string;
@@ -21,54 +14,66 @@ type Device = {
   lastHeartbeat?: string;
 };
 
-const { BaseLayer } = LayersControl;
-
-/* ============================================================
-   🌍 Centre par défaut : Ouagadougou
-============================================================ */
+// 🌍 Centre par défaut : Ouaga
 const DEFAULT_CENTER: [number, number] = [12.3657, -1.5339];
 
-/* ============================================================
-   🔧 Icône Leaflet par défaut (OK Next.js / Cloudflare)
-============================================================ */
-const defaultIcon = L.icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
-
-// On applique cette icône à tous les markers
-L.Marker.prototype.options.icon = defaultIcon;
-
-/* ============================================================
-   🗺️ Composant principal
-============================================================ */
 export default function DevicesMap({ devices }: { devices: Device[] }) {
-  // On garde uniquement les devices avec coordonnées valides
-  const coords = (devices || []).filter(
-    (d) =>
+  const [isClient, setIsClient] = useState(false);
+  const [LeafletComponents, setLeafletComponents] = useState<any>(null);
+
+  useEffect(() => {
+    // Import Leaflet only on client side
+    Promise.all([
+      import("leaflet"),
+      import("react-leaflet"),
+    ]).then(([L, reactLeaflet]) => {
+      // Configure default icon
+      const defaultIcon = L.default.icon({
+        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41],
+      });
+      L.default.Marker.prototype.options.icon = defaultIcon;
+
+      setLeafletComponents({
+        MapContainer: reactLeaflet.MapContainer,
+        TileLayer: reactLeaflet.TileLayer,
+        Marker: reactLeaflet.Marker,
+        Popup: reactLeaflet.Popup,
+        LayersControl: reactLeaflet.LayersControl,
+      });
+      setIsClient(true);
+    });
+  }, []);
+
+  if (!isClient || !LeafletComponents) {
+    return <div className="w-full h-full bg-gray-100 flex items-center justify-center text-gray-500">Chargement de la carte...</div>;
+  }
+
+  const { MapContainer, TileLayer, Marker, Popup, LayersControl } = LeafletComponents;
+  const { BaseLayer } = LayersControl;
+
+  // Dedupe by deviceId, then filter for valid coords
+  const seen = new Set<string>();
+  const coords = (devices || []).filter((d) => {
+    if (seen.has(d.deviceId)) return false;
+    seen.add(d.deviceId);
+    return (
       typeof d.lat === "number" &&
       !Number.isNaN(d.lat) &&
       typeof d.lng === "number" &&
       !Number.isNaN(d.lng)
-  );
+    );
+  });
 
-  // Centre moyen des devices, sinon centre par défaut
+  // Centre moyen des devices ou centre par défaut
   let center: [number, number] = DEFAULT_CENTER;
   if (coords.length > 0) {
-    const sumLat = coords.reduce(
-      (sum, d) => sum + (d.lat as number),
-      0
-    );
-    const sumLng = coords.reduce(
-      (sum, d) => sum + (d.lng as number),
-      0
-    );
+    const sumLat = coords.reduce((sum, d) => sum + (d.lat as number), 0);
+    const sumLng = coords.reduce((sum, d) => sum + (d.lng as number), 0);
     center = [sumLat / coords.length, sumLng / coords.length];
   }
 
@@ -77,7 +82,7 @@ export default function DevicesMap({ devices }: { devices: Device[] }) {
       center={center}
       zoom={12}
       scrollWheelZoom
-      style={{ width: "100%", height: "100%" }}
+      className="w-full h-full"
     >
       <LayersControl position="topright">
         <BaseLayer checked name="Routier (OSM)">
@@ -95,7 +100,6 @@ export default function DevicesMap({ devices }: { devices: Device[] }) {
         </BaseLayer>
       </LayersControl>
 
-      {/* Marqueurs */}
       {coords.map((d) => (
         <Marker
           key={d.deviceId}

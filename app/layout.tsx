@@ -1,3 +1,4 @@
+// app/layout.tsx
 import "./globals.css";
 import type { ReactNode } from "react";
 
@@ -14,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <head>
-        {/* ✅ CSS Leaflet chargée via CDN, plus d'import webpack */}
+        {/* ✅ CSS Leaflet via CDN (aucun import 'leaflet/dist/leaflet.css' dans le JS) */}
         <link
           rel="stylesheet"
           href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"

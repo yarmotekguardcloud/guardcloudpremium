@@ -15,7 +15,7 @@ const CLIENT_ID_KEY = "gc_client_id";
 
 // Carte réutilisée depuis l’admin
 const DevicesMap = dynamic(
-  () => import("../../admin/devices/DevicesMap"),
+  () => import("@/components/devices/DevicesMap"),
   {
     ssr: false,
   },
@@ -139,7 +139,7 @@ export default function ClientDevicesPage() {
         setError(null);
         setLoading(true);
 
-        const res = await fetch(`${API_BASE}/map/devices`);
+        const res = await fetch(`${API_BASE}/devices`);
 
         if (!res.ok) {
           const txt = await res.text();

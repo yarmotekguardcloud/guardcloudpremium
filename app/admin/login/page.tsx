@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
-  "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
+  "http://localhost:8787"; // LOCAL DEV - change back for production
 
 type LoginResponse = {
   ok: boolean;
@@ -53,7 +53,8 @@ export default function AdminLoginPage() {
 
       // 🔐 Stockage simple du token pour TopNavbar / AuthGuard
       if (typeof window !== "undefined") {
-        window.localStorage.setItem("YGC_JWT", data.token);
+        window.localStorage.setItem("gc_admin_token", data.token);
+        window.localStorage.setItem("YGC_JWT", data.token); // legacy
         if (data.role) {
           window.localStorage.setItem("YGC_ROLE", data.role);
         }
