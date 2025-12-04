@@ -1,13 +1,8 @@
 // lib/auth.ts – GuardCloud Premium Frontend API Wrapper
 
-// 🔌 Pour le moment on FORCE l'API locale.
-// Quand le deploy Cloudflare marchera, on changera cette constante.
-const API_BASE = "http://127.0.0.1:8787";
+import { API_BASE } from "./api";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-
-console.log("🔌 GuardCloud API_BASE =", API_BASE);
 
 /**
  * 🔐 Authentification Admin
