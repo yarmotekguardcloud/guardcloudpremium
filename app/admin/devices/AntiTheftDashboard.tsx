@@ -7,17 +7,21 @@ import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// 🔗 Base de ton Worker GuardCloud API (à adapter si besoin)
+// ================== API GUARDClOUD ==================
+
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-// --- Fix des icônes Leaflet (TypeScript-safe) ---
+const DEVICES_ENDPOINT = '/devices';
+const ADMIN_API_KEY = 'YGC-ADMIN';
+
+// ================== FIX ICONES LEAFLET ==================
+
 import markerIcon2xSrc from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIconSrc from 'leaflet/dist/images/marker-icon.png';
 import markerShadowSrc from 'leaflet/dist/images/marker-shadow.png';
 
-// on force en string pour TypeScript
 const markerIcon2x = (markerIcon2xSrc as unknown) as string;
 const markerIcon = (markerIconSrc as unknown) as string;
 const markerShadow = (markerShadowSrc as unknown) as string;
@@ -28,9 +32,10 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-// -------- Types --------
+// ================== TYPES ==================
 
-type DeviceCategory = 'PHONE' | 'PC' | 'DRONE' | 'IOT' | 'OTHER';
+type DeviceCategory = 'PHONE' | 'PC' | 'DRONE' | 'GPS' | 'IOT' | 'OTHER';
+type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
 
 interface Device {
   id: string;
@@ -44,8 +49,6 @@ interface Device {
   isOnline: boolean;
 }
 
-type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
-
 interface CommandResponse {
   ok: boolean;
   message?: string;
@@ -53,7 +56,7 @@ interface CommandResponse {
   info?: string;
 }
 
-// -------- Helpers --------
+// ================== HELPERS ==================
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
@@ -61,13 +64,42 @@ function formatDate(dateIso: string | null): string {
   if (!dateIso) return '—';
   try {
     const d = new Date(dateIso);
-    return d.toLocaleString();
+    return d.toLocaleString('fr-FR');
   } catch {
     return dateIso;
   }
 }
 
-// -------- Composant principal --------
+function getLogicalCategory(raw: any): DeviceCategory {
+  const cat = (raw.category ?? raw.deviceCategory ?? '').toString().toUpperCase();
+  if (['PHONE', 'PC', 'DRONE', 'GPS', 'IOT'].includes(cat)) {
+    return cat as DeviceCategory;
+  }
+
+  const t = (raw.deviceType ?? raw.device_type ?? '').toString().toUpperCase();
+  if (t.includes('DRONE')) return 'DRONE';
+  if (t.includes('PHONE')) return 'PHONE';
+  if (t.includes('PC')) return 'PC';
+  if (t.includes('GPS')) return 'GPS';
+  if (t.includes('IOT')) return 'IOT';
+  return 'OTHER';
+}
+
+function computeOnline(raw: any): boolean {
+  const last =
+    raw.lastHeartbeatAt ??
+    raw.lastSeen ??
+    raw.last_seen ??
+    raw.last_heartbeat_at ??
+    null;
+  if (!last) return false;
+  const t = Date.parse(last);
+  if (Number.isNaN(t)) return false;
+  const diffMin = (Date.now() - t) / 60000;
+  return diffMin <= 30; // en ligne si < 30 min
+}
+
+// ================== COMPOSANT PRINCIPAL ==================
 
 export default function AntiTheftDashboard() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -83,14 +115,14 @@ export default function AntiTheftDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ------- API : chargement des devices depuis le Worker -------
+  // ---------- CHARGER LES DEVICES DEPUIS /devices ----------
 
   async function loadDevices() {
     try {
       setLoading(true);
       setErrorMessage(null);
 
-      const url = `${API_BASE}/admin/devices?type=phone`;
+      const url = `${API_BASE}${DEVICES_ENDPOINT}?apiKey=${ADMIN_API_KEY}`;
       const res = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -101,26 +133,63 @@ export default function AntiTheftDashboard() {
         throw new Error(`Erreur API devices: ${res.status}`);
       }
 
-      const json = await res.json();
+      const data = await res.json();
 
-      // ⚠️ Adapter si ton Worker renvoie un autre format
-      const source = Array.isArray(json) ? json : json.devices ?? [];
-      const mapped: Device[] = source.map((d: any) => ({
-        id: d.id ?? d.deviceId,
-        label: d.label ?? d.deviceName ?? d.deviceId,
-        clientName: d.clientName ?? d.client?.name,
-        category: (d.category ?? 'PHONE') as DeviceCategory,
-        lastLat: d.lastLat ?? d.latitude ?? null,
-        lastLng: d.lastLng ?? d.longitude ?? null,
-        lastSeenAt: d.lastSeenAt ?? d.lastHeartbeatAt ?? null,
-        batteryLevel: d.battery ?? d.batteryLevel ?? null,
-        isOnline: d.isOnline ?? d.online ?? false,
-      }));
+      // même logique que DevicesMapClient
+      let arr: any[] = [];
+      if (Array.isArray(data.devices)) arr = data.devices;
+      else if (Array.isArray(data)) arr = data;
+      else if (data.devices && Array.isArray(data.devices)) arr = data.devices;
 
-      setDevices(mapped);
+      const mappedAll: Device[] = arr.map((r: any) => {
+        const lat =
+          r.lat != null
+            ? Number(r.lat)
+            : r.latDeg != null
+            ? Number(r.latDeg)
+            : null;
+        const lng =
+          r.lng != null
+            ? Number(r.lng)
+            : r.lngDeg != null
+            ? Number(r.lngDeg)
+            : null;
 
-      if (!selected && mapped.length > 0) {
-        setSelected(mapped[0]);
+        const lastSeen =
+          r.lastHeartbeatAt ?? r.lastSeen ?? r.last_seen ?? null;
+
+        const batteryRaw =
+          r.battery ?? r.batteryLevel ?? r.battery_level ?? null;
+
+        const cat = getLogicalCategory(r);
+
+        return {
+          id: String(r.deviceId ?? ''),
+          label:
+            r.deviceName ??
+            r.device_label ??
+            r.clientName ??
+            r.client_name ??
+            r.deviceId ??
+            'Device',
+          clientName: r.clientName ?? r.client_name ?? undefined,
+          category: cat,
+          lastLat: lat,
+          lastLng: lng,
+          lastSeenAt: lastSeen,
+          batteryLevel:
+            batteryRaw != null ? Number(batteryRaw as number | string) : null,
+          isOnline: computeOnline(r),
+        };
+      });
+
+      // ⚠️ Dashboard Antivol : on garde seulement les PHONES
+      const phones = mappedAll.filter((d) => d.category === 'PHONE');
+
+      setDevices(phones);
+
+      if (!selected && phones.length > 0) {
+        setSelected(phones[0]);
       }
     } catch (e: any) {
       console.error(e);
@@ -133,7 +202,7 @@ export default function AntiTheftDashboard() {
     }
   }
 
-  // ------- API : envoi des commandes antivol au Worker -------
+  // ---------- ENVOI DES COMMANDES /admin/ring | /message | /lock ----------
 
   async function sendCommand(action: CommandAction) {
     if (!selected) return;
@@ -143,28 +212,42 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
-      const payload = {
+      let endpoint = '';
+      switch (action) {
+        case 'RING':
+          endpoint = '/admin/ring';
+          break;
+        case 'LOST_MODE':
+          endpoint = '/admin/message';
+          break;
+        case 'LOCK':
+          endpoint = '/admin/lock';
+          break;
+      }
+
+      const body: any = {
+        apiKey: ADMIN_API_KEY,
         deviceId: selected.id,
-        action,
-        message:
-          action === 'RING'
-            ? 'TEST ANTI-VOL YARMOTEK'
-            : action === 'LOST_MODE'
-            ? 'Téléphone perdu – contacter Yarmotek'
-            : 'LOCK_SCREEN',
-        durationSec: action === 'RING' ? 20 : 0,
-        level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const url = `${API_BASE}/admin/commands`;
+      if (action === 'RING') {
+        body.message = 'TEST ANTI-VOL YARMOTEK';
+        body.durationSec = 20;
+        body.level = 'HIGH';
+      }
 
-      const res = await fetch(url, {
+      if (action === 'LOST_MODE') {
+        body.message =
+          'Téléphone perdu / volé – Merci de contacter immédiatement Yarmotek ou le propriétaire.';
+      }
+
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -192,21 +275,16 @@ export default function AntiTheftDashboard() {
     [devices],
   );
 
-  const phoneDevices = useMemo(
-    () => devices.filter((d) => d.category === 'PHONE' || !d.category),
-    [devices],
-  );
-
   const mapCenter: LatLngExpression =
     selected && selected.lastLat != null && selected.lastLng != null
       ? [selected.lastLat, selected.lastLng]
       : OUAGADOUGOU_CENTER;
 
-  // -------- UI --------
+  // ================== RENDU ==================
 
   return (
     <div className="flex h-[calc(100vh-64px)] bg-slate-950 text-slate-50">
-      {/* 🗺️ Carte principale */}
+      {/* 🗺️ Carte */}
       <div className="relative flex-1">
         <MapContainer
           center={mapCenter}
@@ -219,7 +297,7 @@ export default function AntiTheftDashboard() {
             attribution="&copy; OpenStreetMap contributors"
           />
 
-          {phoneDevices
+          {devices
             .filter((d) => d.lastLat != null && d.lastLng != null)
             .map((d) => (
               <Marker
@@ -259,11 +337,11 @@ export default function AntiTheftDashboard() {
             ))}
         </MapContainer>
 
-        {/* Bandeau top sur la carte */}
+        {/* Bandeau sur la carte */}
         <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2">
           <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-slate-900/80 px-4 py-2 shadow-lg shadow-black/40 backdrop-blur">
             <div className="text-xs font-semibold text-emerald-400">
-              Phones SahelGuard : {phoneDevices.length}
+              Phones SahelGuard : {devices.length}
             </div>
             <div className="h-4 w-px bg-slate-700" />
             <div className="text-xs text-sky-300">En ligne : {onlineCount}</div>
@@ -275,7 +353,7 @@ export default function AntiTheftDashboard() {
               }}
               className="ml-2 rounded-full border border-slate-600 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800 active:scale-[0.97]"
             >
-              {reloading || loading ? 'Rafraîchissement...' : 'Rafraîchir'}
+              {reloading || loading ? 'Rafraîchissement…' : 'Rafraîchir'}
             </button>
           </div>
         </div>
