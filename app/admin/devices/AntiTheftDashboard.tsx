@@ -14,6 +14,7 @@ const API_BASE =
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
 const DEVICES_ENDPOINT = '/devices';
+const COMMAND_ENDPOINT = '/admin/commands'; // ⬅️ ICI : endpoint réel probable
 const ADMIN_API_KEY = 'YGC-ADMIN';
 
 // ================== FIX ICONES LEAFLET ==================
@@ -97,7 +98,7 @@ function computeOnline(raw: any): boolean {
   const t = Date.parse(last);
   if (Number.isNaN(t)) return false;
   const diffMin = (Date.now() - t) / 60000;
-  return diffMin <= 30; // en ligne si < 30 min
+  return diffMin <= 30;
 }
 
 // ================== COMPOSANT PRINCIPAL ==================
@@ -116,7 +117,7 @@ export default function AntiTheftDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------- CHARGER LES DEVICES DEPUIS /devices ----------
+  // ---------- CHARGER LES DEVICES ----------
 
   async function loadDevices() {
     try {
@@ -201,7 +202,7 @@ export default function AntiTheftDashboard() {
     }
   }
 
-  // ---------- ENVOI DES COMMANDES via /admin/command ----------
+  // ---------- ENVOI DES COMMANDES via /admin/commands ----------
 
   async function sendCommand(action: CommandAction) {
     if (!selected) return;
@@ -225,7 +226,7 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const res = await fetch(`${API_BASE}/admin/command`, {
+      const res = await fetch(`${API_BASE}${COMMAND_ENDPOINT}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
