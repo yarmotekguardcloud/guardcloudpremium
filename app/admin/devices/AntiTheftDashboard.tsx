@@ -1,18 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Popup,
-} from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// 🛠 Si tes icônes Leaflet ne s’affichent pas, tu peux utiliser ce fix
-// (en commentant si ce n’est pas nécessaire).
+// 🛠 Icônes Leaflet (corrigé pour Next.js / StaticImageData)
 // @ts-ignore
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 // @ts-ignore
@@ -20,10 +14,18 @@ import markerIcon from 'leaflet/dist/images/marker-icon.png';
 // @ts-ignore
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
+// ⚙️ Normalisation StaticImageData -> string pour éviter l'erreur de build
+const markerIcon2xUrl: string =
+  (markerIcon2x as any)?.src ?? (markerIcon2x as any);
+const markerIconUrl: string =
+  (markerIcon as any)?.src ?? (markerIcon as any);
+const markerShadowUrl: string =
+  (markerShadow as any)?.src ?? (markerShadow as any);
+
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: (markerIcon2x as string),
-  iconUrl: (markerIcon as string),
-  shadowUrl: (markerShadow as string),
+  iconRetinaUrl: markerIcon2xUrl,
+  iconUrl: markerIconUrl,
+  shadowUrl: markerShadowUrl,
 });
 
 // -------- Types --------
@@ -77,6 +79,7 @@ export default function AntiTheftDashboard() {
   // Charger les devices au montage
   useEffect(() => {
     void loadDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------- API: chargement devices --------
@@ -90,7 +93,7 @@ export default function AntiTheftDashboard() {
       const res = await fetch('/api/admin/devices?type=phone', {
         method: 'GET',
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
         },
       });
 
@@ -118,10 +121,11 @@ export default function AntiTheftDashboard() {
       if (!selected && mapped.length > 0) {
         setSelected(mapped[0]);
       }
-
     } catch (e: any) {
       console.error(e);
-      setErrorMessage(e.message ?? 'Erreur inconnue lors du chargement des devices');
+      setErrorMessage(
+        e.message ?? 'Erreur inconnue lors du chargement des devices',
+      );
     } finally {
       setLoading(false);
       setReloading(false);
@@ -152,7 +156,7 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      // ⛓️ Adapte l’URL au endpoint réel : ex: /api/admin/command
+      // ⛓️ Adapte l’URL au endpoint réel : ex: /api/admin/commands
       const res = await fetch('/api/admin/commands', {
         method: 'POST',
         headers: {
@@ -173,11 +177,10 @@ export default function AntiTheftDashboard() {
         'Commande envoyée avec succès';
 
       setStatusMessage(`✅ ${msg}`);
-
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
-        e.message ?? 'Erreur lors de l’envoi de la commande antivol'
+        e.message ?? 'Erreur lors de l’envoi de la commande antivol',
       );
     } finally {
       setCommandBusy(false);
@@ -186,12 +189,12 @@ export default function AntiTheftDashboard() {
 
   const onlineCount = useMemo(
     () => devices.filter((d) => d.isOnline).length,
-    [devices]
+    [devices],
   );
 
   const phoneDevices = useMemo(
     () => devices.filter((d) => d.category === 'PHONE' || !d.category),
-    [devices]
+    [devices],
   );
 
   const mapCenter: LatLngExpression =
@@ -265,9 +268,7 @@ export default function AntiTheftDashboard() {
               Phones SahelGuard : {phoneDevices.length}
             </div>
             <div className="h-4 w-px bg-slate-700" />
-            <div className="text-xs text-sky-300">
-              En ligne : {onlineCount}
-            </div>
+            <div className="text-xs text-sky-300">En ligne : {onlineCount}</div>
             <button
               type="button"
               onClick={() => {
