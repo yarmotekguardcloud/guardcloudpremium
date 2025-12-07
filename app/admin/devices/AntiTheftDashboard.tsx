@@ -11,7 +11,7 @@ import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// --- Fix icônes Leaflet par défaut (avec cast propre pour Next 15) ---
+// 🛠 Fix icônes Leaflet (pour build Next + Cloudflare)
 // @ts-ignore
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 // @ts-ignore
@@ -20,9 +20,9 @@ import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x as unknown as string,
-  iconUrl: markerIcon as unknown as string,
-  shadowUrl: markerShadow as unknown as string,
+  iconRetinaUrl: markerIcon2x as string,
+  iconUrl: markerIcon as string,
+  shadowUrl: markerShadow as string,
 });
 
 // -------- Types --------
@@ -38,7 +38,9 @@ interface Device {
   lastLng: number | null;
   lastSeenAt: string | null;
   batteryLevel?: number | null;
-  isOnline: boolean;
+  isOnline?: boolean;          // bool optionnel
+  online?: boolean;            // compat backend
+  status?: 'ONLINE' | 'OFFLINE' | string; // compat backend
 }
 
 type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
@@ -46,17 +48,11 @@ type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
 interface CommandResponse {
   ok: boolean;
   message?: string;
-  [key: string]: any;
+  status?: string;
+  info?: string;
 }
 
-// --------- Constantes API ---------
-
-// 🔗 On parle DIRECTEMENT à ton Worker Cloudflare, comme PowerShell
-const API_BASE =
-  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
-  'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
-
-const ADMIN_API_KEY = 'YGC-ADMIN';
+// --------- Helpers ---------
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
@@ -70,16 +66,12 @@ function formatDate(dateIso: string | null): string {
   }
 }
 
-function normalizeCategory(raw: any): DeviceCategory {
-  const c = (raw.category ?? raw.deviceType ?? raw.type ?? 'PHONE')
-    .toString()
-    .toUpperCase();
-
-  if (c.includes('PC')) return 'PC';
-  if (c.includes('DRONE')) return 'DRONE';
-  if (c.includes('IOT')) return 'IOT';
-  if (c.includes('GPS')) return 'IOT';
-  return 'PHONE';
+// Détermine si le device est “en ligne” à partir des différents champs
+function isDeviceOnlineFlag(d: Device): boolean {
+  if (typeof d.isOnline === 'boolean') return d.isOnline;
+  if (typeof d.online === 'boolean') return d.online;
+  if (typeof d.status === 'string') return d.status.toUpperCase() === 'ONLINE';
+  return false;
 }
 
 // --------- Composant principal ---------
@@ -105,72 +97,61 @@ export default function AntiTheftDashboard() {
       setLoading(true);
       setErrorMessage(null);
 
-      // 📡 On appelle ton Worker : GET /devices
-      const res = await fetch(`${API_BASE}/devices`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
+      // ⛓️ URL API GuardCloud → adapte si tu changes le routeur
+      const res = await fetch(
+        'https://yarmotek-guardcloud-api.myarbanga.workers.dev/devices',
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
         },
-      });
+      );
 
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Erreur API devices: ${res.status} – ${txt}`);
+        throw new Error(`Erreur API devices: ${res.status}`);
       }
 
       const json = await res.json();
 
-      const rawList: any[] =
-        json.devices ??
-        json.items ??
-        (Array.isArray(json) ? json : []);
+      // Compat avec différents formats de réponse
+      const source = (json.devices || json.items || json || []) as any[];
 
-      const mapped: Device[] = rawList.map((d: any) => {
-        const lastLat =
-          d.lat ?? d.latitude ?? d.lastLat ?? null;
-        const lastLng =
-          d.lng ?? d.longitude ?? d.lastLng ?? null;
-
-        return {
-          id: d.deviceId ?? d.id,
-          label:
-            d.name ??
-            d.label ??
-            d.deviceName ??
-            d.deviceId ??
-            d.id ??
-            'Appareil',
-          clientName: d.clientName ?? d.client_name ?? null,
-          category: normalizeCategory(d),
-          lastLat:
-            typeof lastLat === 'number'
-              ? lastLat
-              : lastLat != null
-              ? Number(lastLat)
-              : null,
-          lastLng:
-            typeof lastLng === 'number'
-              ? lastLng
-              : lastLng != null
-              ? Number(lastLng)
-              : null,
-          lastSeenAt:
-            d.lastSeen ??
-            d.lastHeartbeat ??
-            d.lastHeartbeatAt ??
-            null,
-          batteryLevel:
-            d.battery ??
-            d.batteryLevel ??
-            d.battery_level ??
-            null,
-          isOnline:
-            d.isOnline ??
-            d.online ??
-            (d.status === 'ONLINE') ??
-            false,
-        };
-      });
+      const mapped: Device[] = source.map((d: any) => ({
+        id: d.id ?? d.deviceId,
+        label: d.label ?? d.name ?? d.deviceName ?? d.deviceId,
+        clientName: d.clientName ?? d.client_name ?? d.clientId ?? null,
+        category: (d.category ?? 'PHONE') as DeviceCategory,
+        lastLat:
+          d.lastLat ??
+          d.lat ??
+          d.latitude ??
+          d.latDeg ??
+          d.lat_deg ??
+          null,
+        lastLng:
+          d.lastLng ??
+          d.lng ??
+          d.longitude ??
+          d.lngDeg ??
+          d.long_deg ??
+          null,
+        lastSeenAt:
+          d.lastSeenAt ??
+          d.lastSeen ??
+          d.lastHeartbeat ??
+          d.lastHeartbeatAt ??
+          null,
+        batteryLevel:
+          d.battery ??
+          d.batteryLevel ??
+          d.battery_percent ??
+          d.battery_level ??
+          null,
+        isOnline: d.isOnline,
+        online: d.online,
+        status: d.status,
+      }));
 
       setDevices(mapped);
 
@@ -179,10 +160,7 @@ export default function AntiTheftDashboard() {
       }
     } catch (e: any) {
       console.error(e);
-      setErrorMessage(
-        e?.message ??
-          'Erreur inconnue lors du chargement des appareils',
-      );
+      setErrorMessage(e.message ?? 'Erreur inconnue lors du chargement des devices');
     } finally {
       setLoading(false);
       setReloading(false);
@@ -199,9 +177,8 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
-      // 🧠 On reproduit EXACTEMENT PowerShell
       const payload = {
-        apiKey: ADMIN_API_KEY,
+        apiKey: 'YGC-ADMIN',
         deviceId: selected.id,
         action,
         message:
@@ -214,49 +191,53 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const res = await fetch(`${API_BASE}/admin/commands`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+      const res = await fetch(
+        'https://yarmotek-guardcloud-api.myarbanga.workers.dev/admin/commands',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      });
+      );
 
       if (!res.ok) {
         const txt = await res.text();
-        throw new Error(
-          `Erreur API commande: ${res.status} – ${txt}`,
-        );
+        throw new Error(`Erreur API commande: ${res.status} – ${txt}`);
       }
 
-      const json = (await res.json()) as CommandResponse;
+      const json = (await res.json()) as CommandResponse | any;
+
       const msg =
-        json.message ??
-        'Commande envoyée et enregistrée dans GuardCloud ✅';
+        json?.message ||
+        json?.status ||
+        json?.info ||
+        'Commande envoyée avec succès';
 
       setStatusMessage(`✅ ${msg}`);
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
-        e?.message ??
-          "Erreur lors de l’envoi de la commande antivol",
+        e.message ?? 'Erreur lors de l’envoi de la commande antivol',
       );
     } finally {
       setCommandBusy(false);
     }
   }
 
+  // -------- Métriques / dérivés --------
+
   const onlineCount = useMemo(
-    () => devices.filter((d) => d.isOnline).length,
+    () => devices.filter((d) => isDeviceOnlineFlag(d)).length,
     [devices],
   );
 
   const phoneDevices = useMemo(
     () =>
       devices.filter(
-        (d) =>
-          d.category === 'PHONE' || d.category === undefined,
+        (d) => d.category === 'PHONE' || !d.category,
       ),
     [devices],
   );
@@ -274,7 +255,7 @@ export default function AntiTheftDashboard() {
       <div className="relative flex-1">
         <MapContainer
           center={mapCenter}
-          zoom={13}
+          zoom={12}
           className="h-full w-full z-0"
           preferCanvas
         >
@@ -295,9 +276,7 @@ export default function AntiTheftDashboard() {
               >
                 <Popup>
                   <div className="text-sm">
-                    <div className="font-semibold">
-                      {d.label}
-                    </div>
+                    <div className="font-semibold">{d.label}</div>
                     {d.clientName && (
                       <div className="text-xs text-slate-500">
                         Client : {d.clientName}
@@ -315,12 +294,12 @@ export default function AntiTheftDashboard() {
                       Statut :{' '}
                       <span
                         className={
-                          d.isOnline
+                          isDeviceOnlineFlag(d)
                             ? 'text-emerald-400'
                             : 'text-slate-400'
                         }
                       >
-                        {d.isOnline ? 'En ligne' : 'Hors ligne'}
+                        {isDeviceOnlineFlag(d) ? 'En ligne' : 'Hors ligne'}
                       </span>
                     </div>
                   </div>
@@ -347,9 +326,7 @@ export default function AntiTheftDashboard() {
               }}
               className="ml-2 rounded-full border border-slate-600 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800 active:scale-[0.97]"
             >
-              {reloading || loading
-                ? 'Rafraîchissement...'
-                : 'Rafraîchir'}
+              {reloading || loading ? 'Rafraîchissement...' : 'Rafraîchir'}
             </button>
           </div>
         </div>
@@ -365,8 +342,8 @@ export default function AntiTheftDashboard() {
             Dashboard GuardCloud
           </div>
           <div className="mt-1 text-xs text-slate-400">
-            Sélectionne un téléphone sur la carte pour envoyer des
-            commandes anti-vol (RING, LOST_MODE, LOCK).
+            Sélectionne un téléphone sur la carte pour envoyer des commandes
+            anti-vol.
           </div>
         </div>
 
@@ -387,27 +364,23 @@ export default function AntiTheftDashboard() {
                 </div>
                 <div
                   className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    selected.isOnline
+                    isDeviceOnlineFlag(selected)
                       ? 'bg-emerald-500/15 text-emerald-300'
                       : 'bg-slate-600/40 text-slate-200'
                   }`}
                 >
-                  {selected.isOnline ? 'En ligne' : 'Hors ligne'}
+                  {isDeviceOnlineFlag(selected) ? 'En ligne' : 'Hors ligne'}
                 </div>
               </div>
 
               <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
                 <div>
-                  <span className="text-slate-500">
-                    Dernier signal :
-                  </span>
+                  <span className="text-slate-500">Dernier signal :</span>
                   <br />
                   {formatDate(selected.lastSeenAt)}
                 </div>
                 <div>
-                  <span className="text-slate-500">
-                    Batterie :
-                  </span>
+                  <span className="text-slate-500">Batterie :</span>
                   <br />
                   {selected.batteryLevel != null
                     ? `${selected.batteryLevel}%`
@@ -417,8 +390,7 @@ export default function AntiTheftDashboard() {
             </>
           ) : (
             <div className="text-sm text-slate-400">
-              Aucun téléphone sélectionné. Clique sur un marker sur
-              la carte.
+              Aucun téléphone sélectionné. Clique sur un marker sur la carte.
             </div>
           )}
         </div>
@@ -449,7 +421,7 @@ export default function AntiTheftDashboard() {
             onClick={() => void sendCommand('LOCK')}
             className="rounded-xl border border-sky-500/60 bg-sky-500/10 px-3 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
           >
-            🔐 Verrouiller écran (DEMO)
+            🔐 Verrouiller écran (demo)
           </button>
         </div>
 
@@ -466,9 +438,8 @@ export default function AntiTheftDashboard() {
         )}
 
         <div className="mt-auto text-[11px] text-slate-500">
-          API GuardCloud v7 • Les commandes sont stockées dans le
-          Worker et lues par SahelGuard via le Heartbeat (RING,
-          LOST_MODE, LOCK, etc.).
+          API GuardCloud v7 • Les commandes sont lues par SahelGuard via le
+          Heartbeat (RING, LOST_MODE, LOCK, etc.).
         </div>
       </div>
     </div>
