@@ -1,6 +1,9 @@
 // app/api/guardcloud/command/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
+// ⚡ Obligatoire pour Cloudflare Pages + next-on-pages
+export const runtime = 'edge';
+
 // URL de ton Worker Cloudflare
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
@@ -8,35 +11,34 @@ const API_BASE =
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body: any = await req.json();
 
-    // 🔐 On force ici l'API key côté backend (le front n’a jamais besoin de la connaître)
+    // 🔐 On force l'API key côté backend (le front ne voit jamais la clé)
+    const action = String(body.action || 'RING').toUpperCase();
+
     const payload = {
       apiKey: 'YGC-ADMIN',
       deviceId: body.deviceId,
-      action: body.action,
+      action,
       message:
         body.message ??
-        (body.action === 'RING'
+        (action === 'RING'
           ? 'TEST ANTI-VOL YARMOTEK'
-          : body.action === 'LOST_MODE'
+          : action === 'LOST_MODE'
           ? 'Téléphone perdu – contacter Yarmotek'
           : 'LOCK_SCREEN'),
       durationSec:
         typeof body.durationSec === 'number'
           ? body.durationSec
-          : body.action === 'RING'
+          : action === 'RING'
           ? 20
           : 0,
-      level: body.level ?? (body.action === 'RING' ? 'HIGH' : 'NORMAL'),
+      level: body.level ?? (action === 'RING' ? 'HIGH' : 'NORMAL'),
     };
 
-    // 👉 Appel réel vers le Worker Cloudflare
     const workerRes = await fetch(`${API_BASE}/admin/commands`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 
@@ -60,7 +62,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ Succès
     return NextResponse.json(
       {
         ok: true,
