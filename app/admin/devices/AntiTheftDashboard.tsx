@@ -50,10 +50,11 @@ interface Device {
 }
 
 interface CommandResponse {
-  ok: boolean;
+  ok?: boolean;
   message?: string;
   status?: string;
   info?: string;
+  error?: string;
 }
 
 // ================== HELPERS ==================
@@ -135,7 +136,6 @@ export default function AntiTheftDashboard() {
 
       const data = await res.json();
 
-      // même logique que DevicesMapClient
       let arr: any[] = [];
       if (Array.isArray(data.devices)) arr = data.devices;
       else if (Array.isArray(data)) arr = data;
@@ -183,7 +183,6 @@ export default function AntiTheftDashboard() {
         };
       });
 
-      // ⚠️ Dashboard Antivol : on garde seulement les PHONES
       const phones = mappedAll.filter((d) => d.category === 'PHONE');
 
       setDevices(phones);
@@ -202,7 +201,7 @@ export default function AntiTheftDashboard() {
     }
   }
 
-  // ---------- ENVOI DES COMMANDES /admin/ring | /message | /lock ----------
+  // ---------- ENVOI DES COMMANDES via /admin/command ----------
 
   async function sendCommand(action: CommandAction) {
     if (!selected) return;
@@ -212,42 +211,27 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
-      let endpoint = '';
-      switch (action) {
-        case 'RING':
-          endpoint = '/admin/ring';
-          break;
-        case 'LOST_MODE':
-          endpoint = '/admin/message';
-          break;
-        case 'LOCK':
-          endpoint = '/admin/lock';
-          break;
-      }
-
-      const body: any = {
+      const payload = {
         apiKey: ADMIN_API_KEY,
         deviceId: selected.id,
+        action, // "RING" | "LOST_MODE" | "LOCK"
+        message:
+          action === 'RING'
+            ? 'TEST ANTI-VOL YARMOTEK'
+            : action === 'LOST_MODE'
+            ? 'Téléphone perdu / volé – contacter immédiatement Yarmotek / propriétaire.'
+            : 'LOCK_SCREEN',
+        durationSec: action === 'RING' ? 20 : 0,
+        level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      if (action === 'RING') {
-        body.message = 'TEST ANTI-VOL YARMOTEK';
-        body.durationSec = 20;
-        body.level = 'HIGH';
-      }
-
-      if (action === 'LOST_MODE') {
-        body.message =
-          'Téléphone perdu / volé – Merci de contacter immédiatement Yarmotek ou le propriétaire.';
-      }
-
-      const res = await fetch(`${API_BASE}${endpoint}`, {
+      const res = await fetch(`${API_BASE}/admin/command`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -256,6 +240,11 @@ export default function AntiTheftDashboard() {
       }
 
       const json = (await res.json()) as CommandResponse;
+
+      if (json.ok === false) {
+        throw new Error(json.error ?? 'Commande refusée par l’API');
+      }
+
       const msg =
         json.message ?? json.status ?? json.info ?? 'Commande envoyée';
 
