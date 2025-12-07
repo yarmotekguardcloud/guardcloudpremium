@@ -1,3 +1,4 @@
+// app/admin/devices/AntiTheftDashboard.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -6,26 +7,25 @@ import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// 🛠 Icônes Leaflet (corrigé pour Next.js / StaticImageData)
-// @ts-ignore
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
-// @ts-ignore
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-// @ts-ignore
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+// 🔗 Base de ton Worker GuardCloud API (à adapter si besoin)
+const API_BASE =
+  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
+  'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-// ⚙️ Normalisation StaticImageData -> string pour éviter l'erreur de build
-const markerIcon2xUrl: string =
-  (markerIcon2x as any)?.src ?? (markerIcon2x as any);
-const markerIconUrl: string =
-  (markerIcon as any)?.src ?? (markerIcon as any);
-const markerShadowUrl: string =
-  (markerShadow as any)?.src ?? (markerShadow as any);
+// --- Fix des icônes Leaflet (TypeScript-safe) ---
+import markerIcon2xSrc from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIconSrc from 'leaflet/dist/images/marker-icon.png';
+import markerShadowSrc from 'leaflet/dist/images/marker-shadow.png';
+
+// on force en string pour TypeScript
+const markerIcon2x = (markerIcon2xSrc as unknown) as string;
+const markerIcon = (markerIconSrc as unknown) as string;
+const markerShadow = (markerShadowSrc as unknown) as string;
 
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2xUrl,
-  iconUrl: markerIconUrl,
-  shadowUrl: markerShadowUrl,
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
 });
 
 // -------- Types --------
@@ -48,10 +48,12 @@ type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
 
 interface CommandResponse {
   ok: boolean;
-  message: string;
+  message?: string;
+  status?: string;
+  info?: string;
 }
 
-// --------- Helpers ---------
+// -------- Helpers --------
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
@@ -65,7 +67,7 @@ function formatDate(dateIso: string | null): string {
   }
 }
 
-// --------- Composant principal ---------
+// -------- Composant principal --------
 
 export default function AntiTheftDashboard() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -76,25 +78,23 @@ export default function AntiTheftDashboard() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Charger les devices au montage
   useEffect(() => {
     void loadDevices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- API: chargement devices --------
+  // ------- API : chargement des devices depuis le Worker -------
 
   async function loadDevices() {
     try {
       setLoading(true);
       setErrorMessage(null);
 
-      // ⛓️ Adapte l’URL à ton API GuardCloud
-      const res = await fetch('/api/admin/devices?type=phone', {
+      const url = `${API_BASE}/admin/devices?type=phone`;
+      const res = await fetch(url, {
         method: 'GET',
-        headers: {
-          Accept: 'application/json',
-        },
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
       });
 
       if (!res.ok) {
@@ -103,8 +103,9 @@ export default function AntiTheftDashboard() {
 
       const json = await res.json();
 
-      // ⚠️ Adapte ce mapping au format réel de ta réponse API
-      const mapped: Device[] = (json.devices || json || []).map((d: any) => ({
+      // ⚠️ Adapter si ton Worker renvoie un autre format
+      const source = Array.isArray(json) ? json : json.devices ?? [];
+      const mapped: Device[] = source.map((d: any) => ({
         id: d.id ?? d.deviceId,
         label: d.label ?? d.deviceName ?? d.deviceId,
         clientName: d.clientName ?? d.client?.name,
@@ -124,7 +125,7 @@ export default function AntiTheftDashboard() {
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
-        e.message ?? 'Erreur inconnue lors du chargement des devices',
+        e?.message ?? 'Erreur inconnue lors du chargement des devices',
       );
     } finally {
       setLoading(false);
@@ -132,7 +133,7 @@ export default function AntiTheftDashboard() {
     }
   }
 
-  // -------- API: envoi des commandes antivol --------
+  // ------- API : envoi des commandes antivol au Worker -------
 
   async function sendCommand(action: CommandAction) {
     if (!selected) return;
@@ -142,7 +143,6 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
-      // Exemple de payload – adapte à ton Worker/API
       const payload = {
         deviceId: selected.id,
         action,
@@ -156,8 +156,9 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      // ⛓️ Adapte l’URL au endpoint réel : ex: /api/admin/commands
-      const res = await fetch('/api/admin/commands', {
+      const url = `${API_BASE}/admin/commands`;
+
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -171,16 +172,15 @@ export default function AntiTheftDashboard() {
         throw new Error(`Erreur API commande: ${res.status} – ${txt}`);
       }
 
-      const json = (await res.json()) as CommandResponse | any;
+      const json = (await res.json()) as CommandResponse;
       const msg =
-        (json && (json.message || json.status || json.info)) ??
-        'Commande envoyée avec succès';
+        json.message ?? json.status ?? json.info ?? 'Commande envoyée';
 
       setStatusMessage(`✅ ${msg}`);
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
-        e.message ?? 'Erreur lors de l’envoi de la commande antivol',
+        e?.message ?? 'Erreur lors de l’envoi de la commande antivol',
       );
     } finally {
       setCommandBusy(false);
@@ -202,7 +202,7 @@ export default function AntiTheftDashboard() {
       ? [selected.lastLat, selected.lastLng]
       : OUAGADOUGOU_CENTER;
 
-  // -------- Rendu --------
+  // -------- UI --------
 
   return (
     <div className="flex h-[calc(100vh-64px)] bg-slate-950 text-slate-50">
@@ -225,9 +225,7 @@ export default function AntiTheftDashboard() {
               <Marker
                 key={d.id}
                 position={[d.lastLat as number, d.lastLng as number]}
-                eventHandlers={{
-                  click: () => setSelected(d),
-                }}
+                eventHandlers={{ click: () => setSelected(d) }}
               >
                 <Popup>
                   <div className="text-sm">
@@ -289,9 +287,7 @@ export default function AntiTheftDashboard() {
           <div className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
             SahelGuard • Antivol
           </div>
-          <div className="mt-1 text-lg font-semibold">
-            Dashboard GuardCloud
-          </div>
+          <div className="mt-1 text-lg font-semibold">Dashboard GuardCloud</div>
           <div className="mt-1 text-xs text-slate-400">
             Sélectionne un téléphone sur la carte pour envoyer des commandes
             anti-vol.
@@ -304,9 +300,7 @@ export default function AntiTheftDashboard() {
             <>
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold">
-                    {selected.label}
-                  </div>
+                  <div className="text-sm font-semibold">{selected.label}</div>
                   {selected.clientName && (
                     <div className="text-xs text-slate-400">
                       {selected.clientName}
