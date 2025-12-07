@@ -1,12 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Popup,
-} from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -62,7 +57,7 @@ interface CommandResponse {
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
-// URL de base de ton Worker Cloudflare
+// URL de base de ton Worker Cloudflare (pour la carte / devices)
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
@@ -73,7 +68,7 @@ function formatDate(dateIso: string | null): string {
     const d = new Date(dateIso);
     return d.toLocaleString('fr-FR');
   } catch {
-    return dateIso;
+    return dateIso ?? '—';
   }
 }
 
@@ -124,9 +119,7 @@ export default function AntiTheftDashboard() {
       const json = await res.json();
 
       const list: any[] =
-        json.devices ??
-        json.items ??
-        (Array.isArray(json) ? json : []);
+        json.devices ?? json.items ?? (Array.isArray(json) ? json : []);
 
       const mapped: Device[] = list
         .map((d: any) => {
@@ -213,8 +206,8 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
+      // Payload envoyé à la route Next.js (proxy)
       const payload = {
-        apiKey: 'YGC-ADMIN',
         deviceId: selected.id,
         action,
         message:
@@ -227,7 +220,8 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const res = await fetch(`${API_BASE}/admin/commands`, {
+      // ✅ Appel au backend Next (même domaine → pas de CORS)
+      const res = await fetch('/api/guardcloud/command', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -243,7 +237,10 @@ export default function AntiTheftDashboard() {
 
       const json = (await res.json()) as CommandResponse | any;
       const msg =
-        json?.message ?? json?.status ?? json?.info ?? 'Commande envoyée';
+        json?.message ??
+        json?.status ??
+        json?.info ??
+        (json?.ok ? 'Commande envoyée avec succès' : 'Commande envoyée');
 
       setStatusMessage(`✅ ${msg}`);
     } catch (e: any) {
