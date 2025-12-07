@@ -11,7 +11,7 @@ import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// 🛠 Fix icônes Leaflet (pour build Next + Cloudflare)
+// 🛠 Fix icônes Leaflet pour Next.js (StaticImageData -> string)
 // @ts-ignore
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 // @ts-ignore
@@ -19,10 +19,18 @@ import markerIcon from 'leaflet/dist/images/marker-icon.png';
 // @ts-ignore
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
+// On récupère l’URL string (que ce soit .src ou directement la valeur)
+const markerIcon2xUrl: string =
+  (markerIcon2x as any)?.src ?? (markerIcon2x as any);
+const markerIconUrl: string =
+  (markerIcon as any)?.src ?? (markerIcon as any);
+const markerShadowUrl: string =
+  (markerShadow as any)?.src ?? (markerShadow as any);
+
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x as string,
-  iconUrl: markerIcon as string,
-  shadowUrl: markerShadow as string,
+  iconRetinaUrl: markerIcon2xUrl,
+  iconUrl: markerIconUrl,
+  shadowUrl: markerShadowUrl,
 });
 
 // -------- Types --------
@@ -38,9 +46,7 @@ interface Device {
   lastLng: number | null;
   lastSeenAt: string | null;
   batteryLevel?: number | null;
-  isOnline?: boolean;          // bool optionnel
-  online?: boolean;            // compat backend
-  status?: 'ONLINE' | 'OFFLINE' | string; // compat backend
+  isOnline: boolean;
 }
 
 type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
@@ -52,9 +58,14 @@ interface CommandResponse {
   info?: string;
 }
 
-// --------- Helpers ---------
+// --------- Constantes API + helpers ---------
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
+
+// URL de base de ton Worker Cloudflare
+const API_BASE =
+  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
+  'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
 function formatDate(dateIso: string | null): string {
   if (!dateIso) return '—';
@@ -66,12 +77,13 @@ function formatDate(dateIso: string | null): string {
   }
 }
 
-// Détermine si le device est “en ligne” à partir des différents champs
-function isDeviceOnlineFlag(d: Device): boolean {
-  if (typeof d.isOnline === 'boolean') return d.isOnline;
-  if (typeof d.online === 'boolean') return d.online;
-  if (typeof d.status === 'string') return d.status.toUpperCase() === 'ONLINE';
-  return false;
+function normalizeCategory(raw: any): DeviceCategory {
+  const c = String(raw ?? '').toUpperCase();
+  if (c.includes('PHONE')) return 'PHONE';
+  if (c.includes('PC')) return 'PC';
+  if (c.includes('DRONE')) return 'DRONE';
+  if (c.includes('IOT')) return 'IOT';
+  return 'OTHER';
 }
 
 // --------- Composant principal ---------
@@ -97,16 +109,13 @@ export default function AntiTheftDashboard() {
       setLoading(true);
       setErrorMessage(null);
 
-      // ⛓️ URL API GuardCloud → adapte si tu changes le routeur
-      const res = await fetch(
-        'https://yarmotek-guardcloud-api.myarbanga.workers.dev/devices',
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-          },
+      const url = `${API_BASE}/devices`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
         },
-      );
+      });
 
       if (!res.ok) {
         throw new Error(`Erreur API devices: ${res.status}`);
@@ -114,44 +123,69 @@ export default function AntiTheftDashboard() {
 
       const json = await res.json();
 
-      // Compat avec différents formats de réponse
-      const source = (json.devices || json.items || json || []) as any[];
+      const list: any[] =
+        json.devices ??
+        json.items ??
+        (Array.isArray(json) ? json : []);
 
-      const mapped: Device[] = source.map((d: any) => ({
-        id: d.id ?? d.deviceId,
-        label: d.label ?? d.name ?? d.deviceName ?? d.deviceId,
-        clientName: d.clientName ?? d.client_name ?? d.clientId ?? null,
-        category: (d.category ?? 'PHONE') as DeviceCategory,
-        lastLat:
-          d.lastLat ??
-          d.lat ??
-          d.latitude ??
-          d.latDeg ??
-          d.lat_deg ??
-          null,
-        lastLng:
-          d.lastLng ??
-          d.lng ??
-          d.longitude ??
-          d.lngDeg ??
-          d.long_deg ??
-          null,
-        lastSeenAt:
-          d.lastSeenAt ??
-          d.lastSeen ??
-          d.lastHeartbeat ??
-          d.lastHeartbeatAt ??
-          null,
-        batteryLevel:
-          d.battery ??
-          d.batteryLevel ??
-          d.battery_percent ??
-          d.battery_level ??
-          null,
-        isOnline: d.isOnline,
-        online: d.online,
-        status: d.status,
-      }));
+      const mapped: Device[] = list
+        .map((d: any) => {
+          const id = String(d.deviceId ?? d.id ?? '');
+          if (!id) return null;
+
+          const lat =
+            typeof d.lat === 'number'
+              ? d.lat
+              : typeof d.latitude === 'number'
+              ? d.latitude
+              : null;
+          const lng =
+            typeof d.lng === 'number'
+              ? d.lng
+              : typeof d.longitude === 'number'
+              ? d.longitude
+              : null;
+
+          const online =
+            typeof d.isOnline === 'boolean'
+              ? d.isOnline
+              : typeof d.online === 'boolean'
+              ? d.online
+              : d.status === 'ONLINE';
+
+          const batteryRaw =
+            d.battery ?? d.batteryLevel ?? d.battery_level ?? null;
+          const battery =
+            typeof batteryRaw === 'number'
+              ? batteryRaw
+              : batteryRaw != null
+              ? Number(batteryRaw)
+              : null;
+
+          return {
+            id,
+            label:
+              d.name ??
+              d.deviceName ??
+              d.label ??
+              d.deviceId ??
+              d.id ??
+              'Device',
+            clientName: d.clientName ?? d.clientId ?? undefined,
+            category: normalizeCategory(d.category ?? d.deviceType ?? 'PHONE'),
+            lastLat: lat,
+            lastLng: lng,
+            lastSeenAt:
+              d.lastSeen ??
+              d.lastHeartbeat ??
+              d.lastSeenIso ??
+              d.updatedAt ??
+              null,
+            batteryLevel: battery,
+            isOnline: !!online,
+          } as Device;
+        })
+        .filter(Boolean) as Device[];
 
       setDevices(mapped);
 
@@ -160,7 +194,9 @@ export default function AntiTheftDashboard() {
       }
     } catch (e: any) {
       console.error(e);
-      setErrorMessage(e.message ?? 'Erreur inconnue lors du chargement des devices');
+      setErrorMessage(
+        e?.message ?? 'Erreur inconnue lors du chargement des devices',
+      );
     } finally {
       setLoading(false);
       setReloading(false);
@@ -191,17 +227,14 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const res = await fetch(
-        'https://yarmotek-guardcloud-api.myarbanga.workers.dev/admin/commands',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify(payload),
+      const res = await fetch(`${API_BASE}/admin/commands`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
-      );
+        body: JSON.stringify(payload),
+      });
 
       if (!res.ok) {
         const txt = await res.text();
@@ -209,36 +242,27 @@ export default function AntiTheftDashboard() {
       }
 
       const json = (await res.json()) as CommandResponse | any;
-
       const msg =
-        json?.message ||
-        json?.status ||
-        json?.info ||
-        'Commande envoyée avec succès';
+        json?.message ?? json?.status ?? json?.info ?? 'Commande envoyée';
 
       setStatusMessage(`✅ ${msg}`);
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
-        e.message ?? 'Erreur lors de l’envoi de la commande antivol',
+        e?.message ?? 'Erreur lors de l’envoi de la commande antivol',
       );
     } finally {
       setCommandBusy(false);
     }
   }
 
-  // -------- Métriques / dérivés --------
-
-  const onlineCount = useMemo(
-    () => devices.filter((d) => isDeviceOnlineFlag(d)).length,
+  const phoneDevices = useMemo(
+    () => devices.filter((d) => d.category === 'PHONE'),
     [devices],
   );
 
-  const phoneDevices = useMemo(
-    () =>
-      devices.filter(
-        (d) => d.category === 'PHONE' || !d.category,
-      ),
+  const onlineCount = useMemo(
+    () => devices.filter((d) => d.isOnline).length,
     [devices],
   );
 
@@ -291,15 +315,13 @@ export default function AntiTheftDashboard() {
                       </div>
                     )}
                     <div className="mt-1 text-xs">
-                      Statut :{' '}
+                      Statut:{' '}
                       <span
                         className={
-                          isDeviceOnlineFlag(d)
-                            ? 'text-emerald-400'
-                            : 'text-slate-400'
+                          d.isOnline ? 'text-emerald-400' : 'text-slate-400'
                         }
                       >
-                        {isDeviceOnlineFlag(d) ? 'En ligne' : 'Hors ligne'}
+                        {d.isOnline ? 'En ligne' : 'Hors ligne'}
                       </span>
                     </div>
                   </div>
@@ -364,12 +386,12 @@ export default function AntiTheftDashboard() {
                 </div>
                 <div
                   className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    isDeviceOnlineFlag(selected)
+                    selected.isOnline
                       ? 'bg-emerald-500/15 text-emerald-300'
                       : 'bg-slate-600/40 text-slate-200'
                   }`}
                 >
-                  {isDeviceOnlineFlag(selected) ? 'En ligne' : 'Hors ligne'}
+                  {selected.isOnline ? 'En ligne' : 'Hors ligne'}
                 </div>
               </div>
 
