@@ -55,7 +55,7 @@ interface Device {
   lastLng: number | null;
   lastSeenAt: string | null;
   lastHeartbeatAt: string | null;
-  lastSeenMs: number | null; // pour filtre & dédoublonnage
+  lastSeenMs: number | null;
 
   gpsAccuracy?: number | null;
   batteryLevel?: number | null;
@@ -78,19 +78,21 @@ interface CommandResponse {
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
-// URL de base du Worker Cloudflare
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-// Endpoint direct pour les commandes admin
-const COMMAND_API = `${API_BASE}/admin/commands`;
+// route proxy Next (même domaine → pas de CORS)
+const COMMAND_PROXY = '/api/guardcloud/command';
 
-// apiKey admin (peut être surchargée par env si tu veux)
+// fallback direct vers le Worker (si jamais le proxy n’existe pas)
+const COMMAND_DIRECT = `${API_BASE}/admin/commands`;
+
+// clé admin côté front uniquement pour le fallback direct
 const ADMIN_API_KEY =
   process.env.NEXT_PUBLIC_GUARDCLOUD_ADMIN_KEY ?? 'YGC-ADMIN';
 
-// devices “actifs” si dernier signal < 24h
+// devices actifs si < 24h
 const ACTIVE_DEVICE_MAX_MINUTES = 24 * 60;
 
 function formatDate(dateIso?: string | null): string {
@@ -125,13 +127,13 @@ function getShortLabel(label: string): string {
 function createDeviceIcon(device: Device): L.DivIcon {
   const battery = device.batteryLevel ?? 100;
 
-  let ringColor = '#22c55e'; // vert : en ligne OK
+  let ringColor = '#22c55e';
   if (!device.isOnline) {
-    ringColor = '#64748b'; // gris : hors ligne
+    ringColor = '#64748b';
   } else if (battery <= 5) {
-    ringColor = '#dc2626'; // rouge : critique
+    ringColor = '#dc2626';
   } else if (battery <= 20) {
-    ringColor = '#f97316'; // orange : faible
+    ringColor = '#f97316';
   }
 
   const label = getShortLabel(device.label);
@@ -208,7 +210,6 @@ export default function AntiTheftDashboard() {
 
       let res: Response | null = null;
 
-      // 1️⃣ Essai via API proxy (si tu la gardes)
       try {
         res = await fetch('/api/admin/devices', {
           method: 'GET',
@@ -219,7 +220,6 @@ export default function AntiTheftDashboard() {
         res = null;
       }
 
-      // 2️⃣ Fallback direct vers Worker
       if (!res) {
         res = await fetch(`${API_BASE}/devices`, {
           method: 'GET',
@@ -338,14 +338,12 @@ export default function AntiTheftDashboard() {
         })
         .filter(Boolean) as Device[];
 
-      // 1️⃣ on garde seulement les devices récents
       const recent = rawMapped.filter((dev) => {
         if (!dev.lastSeenMs) return false;
         const ageMin = (now - dev.lastSeenMs) / 60000;
         return ageMin <= ACTIVE_DEVICE_MAX_MINUTES;
       });
 
-      // 2️⃣ on dédoublonne par id → le plus récent gagne
       const dedup = new Map<string, Device>();
       for (const dev of recent) {
         const existing = dedup.get(dev.id);
@@ -358,7 +356,6 @@ export default function AntiTheftDashboard() {
 
       setDevices(cleaned);
 
-      // garder le même device sélectionné si possible
       let newSelected: Device | null = null;
       if (selected) {
         newSelected =
@@ -388,8 +385,7 @@ export default function AntiTheftDashboard() {
       setStatusMessage(null);
       setErrorMessage(null);
 
-      const payload = {
-        apiKey: ADMIN_API_KEY,
+      const basePayload = {
         deviceId: selected.id,
         action,
         message:
@@ -402,14 +398,44 @@ export default function AntiTheftDashboard() {
         level: action === 'RING' ? 'HIGH' : 'NORMAL',
       };
 
-      const res = await fetch(COMMAND_API, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      let res: Response | null = null;
+
+      // 1️⃣ On tente d’abord le proxy Next (même domaine)
+      try {
+        res = await fetch(COMMAND_PROXY, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(basePayload),
+        });
+        if (!res.ok && res.status >= 500) {
+          // pour 5xx on tentera le fallback direct
+          console.warn('Proxy error, fallback direct:', res.status);
+          res = null;
+        }
+      } catch (err) {
+        console.warn('Proxy fetch failed, fallback direct', err);
+        res = null;
+      }
+
+      // 2️⃣ Fallback direct vers le Worker (avec apiKey)
+      if (!res) {
+        const directPayload = {
+          ...basePayload,
+          apiKey: ADMIN_API_KEY,
+        };
+
+        res = await fetch(COMMAND_DIRECT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(directPayload),
+        });
+      }
 
       if (!res.ok) {
         const txt = await res.text();
