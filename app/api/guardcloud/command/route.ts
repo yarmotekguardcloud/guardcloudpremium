@@ -1,82 +1,44 @@
 // app/api/guardcloud/command/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-
-// ⚡ Obligatoire pour Cloudflare Pages + next-on-pages
 export const runtime = 'edge';
 
-// URL de ton Worker Cloudflare
+// 🔗 Base de l’API GuardCloud (Worker Cloudflare)
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-export async function POST(req: NextRequest) {
+export async function POST(request: Request): Promise<Response> {
   try {
-    const body: any = await req.json();
+    const payload = await request.json();
 
-    // 🔐 On force l'API key côté backend (le front ne voit jamais la clé)
-    const action = String(body.action || 'RING').toUpperCase();
-
-    const payload = {
-      apiKey: 'YGC-ADMIN',
-      deviceId: body.deviceId,
-      action,
-      message:
-        body.message ??
-        (action === 'RING'
-          ? 'TEST ANTI-VOL YARMOTEK'
-          : action === 'LOST_MODE'
-          ? 'Téléphone perdu – contacter Yarmotek'
-          : 'LOCK_SCREEN'),
-      durationSec:
-        typeof body.durationSec === 'number'
-          ? body.durationSec
-          : action === 'RING'
-          ? 20
-          : 0,
-      level: body.level ?? (action === 'RING' ? 'HIGH' : 'NORMAL'),
-    };
-
-    const workerRes = await fetch(`${API_BASE}/admin/commands`, {
+    const upstream = await fetch(`${API_BASE}/admin/commands`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
       body: JSON.stringify(payload),
     });
 
-    const text = await workerRes.text();
-    let json: any;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = { raw: text };
-    }
+    const text = await upstream.text();
 
-    if (!workerRes.ok || json?.ok === false) {
-      return NextResponse.json(
-        {
-          ok: false,
-          status: workerRes.status,
-          error: json?.error ?? 'Erreur Worker Cloudflare',
-          raw: json,
-        },
-        { status: workerRes.status || 500 },
-      );
-    }
-
-    return NextResponse.json(
-      {
-        ok: true,
-        command: json.command ?? json,
+    // On renvoie tel quel au front (JSON ou texte)
+    return new Response(text, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': upstream.headers.get('Content-Type') ?? 'application/json',
       },
-      { status: 200 },
-    );
+    });
   } catch (err: any) {
-    console.error('Erreur proxy /api/guardcloud/command', err);
-    return NextResponse.json(
-      {
+    console.error('GuardCloud proxy error', err);
+    return new Response(
+      JSON.stringify({
         ok: false,
-        error: err?.message ?? 'Erreur interne proxy GuardCloud',
+        error: err?.message ?? 'Proxy error',
+      }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
       },
-      { status: 500 },
     );
   }
 }
