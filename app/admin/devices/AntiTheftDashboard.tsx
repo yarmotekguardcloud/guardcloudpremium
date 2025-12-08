@@ -55,6 +55,7 @@ interface Device {
   lastLng: number | null;
   lastSeenAt: string | null;
   lastHeartbeatAt: string | null;
+  lastSeenMs: number | null; // pour filtre & dédoublonnage
 
   gpsAccuracy?: number | null;
   batteryLevel?: number | null;
@@ -77,15 +78,20 @@ interface CommandResponse {
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
+// URL de base du Worker Cloudflare
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-/**
- * API proxy côté Next.js pour les commandes antivol :
- * /api/guardcloud/command → Worker Cloudflare /admin/commands
- */
-const COMMAND_API = '/api/guardcloud/command';
+// Endpoint direct pour les commandes admin
+const COMMAND_API = `${API_BASE}/admin/commands`;
+
+// apiKey admin (peut être surchargée par env si tu veux)
+const ADMIN_API_KEY =
+  process.env.NEXT_PUBLIC_GUARDCLOUD_ADMIN_KEY ?? 'YGC-ADMIN';
+
+// devices “actifs” si dernier signal < 24h
+const ACTIVE_DEVICE_MAX_MINUTES = 24 * 60;
 
 function formatDate(dateIso?: string | null): string {
   if (!dateIso) return '—';
@@ -119,7 +125,6 @@ function getShortLabel(label: string): string {
 function createDeviceIcon(device: Device): L.DivIcon {
   const battery = device.batteryLevel ?? 100;
 
-  // Couleur de l’anneau selon statut + batterie
   let ringColor = '#22c55e'; // vert : en ligne OK
   if (!device.isOnline) {
     ringColor = '#64748b'; // gris : hors ligne
@@ -136,7 +141,6 @@ function createDeviceIcon(device: Device): L.DivIcon {
       position: relative;
       transform: translate(-50%, -50%);
     ">
-      <!-- Capsule avec nom du device -->
       <div style="
         min-width: 64px;
         max-width: 120px;
@@ -154,7 +158,6 @@ function createDeviceIcon(device: Device): L.DivIcon {
         ${label}
       </div>
 
-      <!-- Pastille sur la position précise -->
       <div style="
         position: absolute;
         left: 50%;
@@ -205,21 +208,18 @@ export default function AntiTheftDashboard() {
 
       let res: Response | null = null;
 
-      // 1️⃣ On tente d’abord l’API proxy Next.js (si déployée)
+      // 1️⃣ Essai via API proxy (si tu la gardes)
       try {
         res = await fetch('/api/admin/devices', {
           method: 'GET',
           headers: { Accept: 'application/json' },
         });
-        if (!res.ok) {
-          // on force le fallback
-          res = null;
-        }
+        if (!res.ok) res = null;
       } catch {
         res = null;
       }
 
-      // 2️⃣ Fallback direct vers le Worker Cloudflare
+      // 2️⃣ Fallback direct vers Worker
       if (!res) {
         res = await fetch(`${API_BASE}/devices`, {
           method: 'GET',
@@ -238,7 +238,9 @@ export default function AntiTheftDashboard() {
         json.items ??
         (Array.isArray(json) ? json : []);
 
-      const mapped: Device[] = list
+      const now = Date.now();
+
+      const rawMapped: Device[] = list
         .map((d: any): Device | null => {
           const id = String(d.deviceId ?? d.id ?? '');
           if (!id) return null;
@@ -282,19 +284,25 @@ export default function AntiTheftDashboard() {
               ? Number(gpsAccRaw)
               : null;
 
-          const lastSeen =
+          const lastSeenIso: string | null =
             d.lastSeen ??
             d.lastSeenIso ??
             d.updatedAt ??
             d.lastHeartbeat ??
             null;
 
-          const lastHb =
+          const lastHeartbeatIso: string | null =
             d.lastHeartbeat ??
             d.lastHeartbeatAt ??
             d.lastSeen ??
             d.updatedAt ??
             null;
+
+          const lastSeenMs: number | null = lastSeenIso
+            ? Number.isFinite(Date.parse(lastSeenIso))
+              ? Date.parse(lastSeenIso)
+              : now
+            : null;
 
           return {
             id,
@@ -316,8 +324,9 @@ export default function AntiTheftDashboard() {
 
             lastLat: lat,
             lastLng: lng,
-            lastSeenAt: lastSeen,
-            lastHeartbeatAt: lastHb,
+            lastSeenAt: lastSeenIso,
+            lastHeartbeatAt: lastHeartbeatIso,
+            lastSeenMs,
 
             gpsAccuracy,
             batteryLevel: battery,
@@ -329,11 +338,35 @@ export default function AntiTheftDashboard() {
         })
         .filter(Boolean) as Device[];
 
-      setDevices(mapped);
+      // 1️⃣ on garde seulement les devices récents
+      const recent = rawMapped.filter((dev) => {
+        if (!dev.lastSeenMs) return false;
+        const ageMin = (now - dev.lastSeenMs) / 60000;
+        return ageMin <= ACTIVE_DEVICE_MAX_MINUTES;
+      });
 
-      if (!selected && mapped.length > 0) {
-        setSelected(mapped[0]);
+      // 2️⃣ on dédoublonne par id → le plus récent gagne
+      const dedup = new Map<string, Device>();
+      for (const dev of recent) {
+        const existing = dedup.get(dev.id);
+        if (!existing || (existing.lastSeenMs ?? 0) < (dev.lastSeenMs ?? 0)) {
+          dedup.set(dev.id, dev);
+        }
       }
+
+      const cleaned = Array.from(dedup.values());
+
+      setDevices(cleaned);
+
+      // garder le même device sélectionné si possible
+      let newSelected: Device | null = null;
+      if (selected) {
+        newSelected =
+          cleaned.find((d) => d.id === selected.id) ?? cleaned[0] ?? null;
+      } else if (cleaned.length > 0) {
+        newSelected = cleaned[0];
+      }
+      setSelected(newSelected);
     } catch (e: any) {
       console.error(e);
       setErrorMessage(
@@ -356,6 +389,7 @@ export default function AntiTheftDashboard() {
       setErrorMessage(null);
 
       const payload = {
+        apiKey: ADMIN_API_KEY,
         deviceId: selected.id,
         action,
         message:
