@@ -11,7 +11,10 @@ import type { LatLngExpression } from 'leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// 🛠 Fix icônes Leaflet pour Next.js (StaticImageData -> string)
+// ----------------------------
+//  Fix icônes Leaflet (Next.js)
+// ----------------------------
+
 // @ts-ignore
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 // @ts-ignore
@@ -19,7 +22,6 @@ import markerIcon from 'leaflet/dist/images/marker-icon.png';
 // @ts-ignore
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
-// On récupère l’URL string (que ce soit .src ou directement la valeur)
 const markerIcon2xUrl: string =
   (markerIcon2x as any)?.src ?? (markerIcon2x as any);
 const markerIconUrl: string =
@@ -33,28 +35,34 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadowUrl,
 });
 
-// -------- Types --------
+// ----------------------------
+//  Types
+// ----------------------------
 
 type DeviceCategory = 'PHONE' | 'PC' | 'DRONE' | 'IOT' | 'OTHER';
+type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
 
 interface Device {
   id: string;
   label: string;
-  clientName?: string;
-  clientPhone?: string;
+  clientId?: string | null;
+  clientName?: string | null;
+  clientPhone?: string | null;
+
   category: DeviceCategory;
+
   lastLat: number | null;
   lastLng: number | null;
   lastSeenAt: string | null;
   lastHeartbeatAt: string | null;
-  batteryLevel?: number | null;
+
   gpsAccuracy?: number | null;
-  networkType?: string;
-  ip?: string;
+  batteryLevel?: number | null;
+  networkType?: string | null;
+  ip?: string | null;
+
   isOnline: boolean;
 }
-
-type CommandAction = 'RING' | 'LOST_MODE' | 'LOCK';
 
 interface CommandResponse {
   ok: boolean;
@@ -63,22 +71,27 @@ interface CommandResponse {
   info?: string;
 }
 
-// --------- Constantes API + helpers ---------
+// ----------------------------
+//  Constantes API + helpers
+// ----------------------------
 
 const OUAGADOUGOU_CENTER: LatLngExpression = [12.3714, -1.5197];
 
-// Worker Cloudflare pour /devices
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   'https://yarmotek-guardcloud-api.myarbanga.workers.dev';
 
-// Route API Next locale pour les commandes antivol
+/**
+ * API proxy côté Next.js pour les commandes antivol :
+ * /api/guardcloud/command → Worker Cloudflare /admin/commands
+ */
 const COMMAND_API = '/api/guardcloud/command';
 
-function formatDate(dateIso: string | null): string {
+function formatDate(dateIso?: string | null): string {
   if (!dateIso) return '—';
   try {
     const d = new Date(dateIso);
+    if (Number.isNaN(d.getTime())) return dateIso;
     return d.toLocaleString('fr-FR');
   } catch {
     return dateIso;
@@ -94,7 +107,80 @@ function normalizeCategory(raw: any): DeviceCategory {
   return 'OTHER';
 }
 
-// --------- Composant principal ---------
+// ===== Helpers pour marqueurs intelligents =====
+
+function getShortLabel(label: string): string {
+  if (!label) return '…';
+  const trimmed = label.trim();
+  if (trimmed.length <= 10) return trimmed;
+  return trimmed.slice(0, 10);
+}
+
+function createDeviceIcon(device: Device): L.DivIcon {
+  const battery = device.batteryLevel ?? 100;
+
+  // Couleur de l’anneau selon statut + batterie
+  let ringColor = '#22c55e'; // vert : en ligne OK
+  if (!device.isOnline) {
+    ringColor = '#64748b'; // gris : hors ligne
+  } else if (battery <= 5) {
+    ringColor = '#dc2626'; // rouge : critique
+  } else if (battery <= 20) {
+    ringColor = '#f97316'; // orange : faible
+  }
+
+  const label = getShortLabel(device.label);
+
+  const html = `
+    <div style="
+      position: relative;
+      transform: translate(-50%, -50%);
+    ">
+      <!-- Capsule avec nom du device -->
+      <div style="
+        min-width: 64px;
+        max-width: 120px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(2,6,23,0.95);
+        color: #f9fafb;
+        font-size: 11px;
+        font-weight: 600;
+        text-align: center;
+        box-shadow: 0 10px 25px rgba(15,23,42,0.65);
+        border: 1px solid rgba(30,64,175,0.7);
+        white-space: nowrap;
+      ">
+        ${label}
+      </div>
+
+      <!-- Pastille sur la position précise -->
+      <div style="
+        position: absolute;
+        left: 50%;
+        top: 100%;
+        transform: translate(-50%, 4px);
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        background: radial-gradient(circle at 30% 30%, #e5e7eb, #020617);
+        border: 3px solid ${ringColor};
+        box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      "></div>
+    </div>
+  `;
+
+  return L.divIcon({
+    className: 'sahelguard-device-icon',
+    html,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
+// ----------------------------
+//  Composant principal
+// ----------------------------
 
 export default function AntiTheftDashboard() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -105,38 +191,55 @@ export default function AntiTheftDashboard() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Charger les devices au montage
   useEffect(() => {
     void loadDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- API: chargement devices --------
+  // -------- Chargement devices --------
 
   async function loadDevices() {
     try {
       setLoading(true);
       setErrorMessage(null);
 
-      const url = `${API_BASE}/devices`;
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-        },
-      });
+      let res: Response | null = null;
+
+      // 1️⃣ On tente d’abord l’API proxy Next.js (si déployée)
+      try {
+        res = await fetch('/api/admin/devices', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) {
+          // on force le fallback
+          res = null;
+        }
+      } catch {
+        res = null;
+      }
+
+      // 2️⃣ Fallback direct vers le Worker Cloudflare
+      if (!res) {
+        res = await fetch(`${API_BASE}/devices`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+      }
 
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Erreur API devices: ${res.status} – ${txt}`);
+        throw new Error(`Erreur API devices: ${res.status}`);
       }
 
       const json = await res.json();
 
       const list: any[] =
-        json.devices ?? json.items ?? (Array.isArray(json) ? json : []);
+        json.devices ??
+        json.items ??
+        (Array.isArray(json) ? json : []);
 
       const mapped: Device[] = list
-        .map((d: any) => {
+        .map((d: any): Device | null => {
           const id = String(d.deviceId ?? d.id ?? '');
           if (!id) return null;
 
@@ -146,6 +249,7 @@ export default function AntiTheftDashboard() {
               : typeof d.latitude === 'number'
               ? d.latitude
               : null;
+
           const lng =
             typeof d.lng === 'number'
               ? d.lng
@@ -153,7 +257,7 @@ export default function AntiTheftDashboard() {
               ? d.longitude
               : null;
 
-          const online =
+          const rawOnline =
             typeof d.isOnline === 'boolean'
               ? d.isOnline
               : typeof d.online === 'boolean'
@@ -169,11 +273,27 @@ export default function AntiTheftDashboard() {
               ? Number(batteryRaw)
               : null;
 
-          const gpsAcc =
-            d.accuracy_m ??
-            d.gpsAccuracy ??
-            d.gps_accuracy ??
-            d.accuracy ??
+          const gpsAccRaw =
+            d.accuracy_m ?? d.accuracy ?? d.locationAccuracy ?? null;
+          const gpsAccuracy =
+            typeof gpsAccRaw === 'number'
+              ? gpsAccRaw
+              : gpsAccRaw != null
+              ? Number(gpsAccRaw)
+              : null;
+
+          const lastSeen =
+            d.lastSeen ??
+            d.lastSeenIso ??
+            d.updatedAt ??
+            d.lastHeartbeat ??
+            null;
+
+          const lastHb =
+            d.lastHeartbeat ??
+            d.lastHeartbeatAt ??
+            d.lastSeen ??
+            d.updatedAt ??
             null;
 
           return {
@@ -185,29 +305,27 @@ export default function AntiTheftDashboard() {
               d.deviceId ??
               d.id ??
               'Device',
-            clientName: d.clientName ?? d.client_id ?? d.clientId ?? undefined,
-            clientPhone: d.clientPhone ?? d.client_phone ?? undefined,
-            category: normalizeCategory(d.category ?? d.deviceType ?? 'PHONE'),
+
+            clientId: d.clientId ?? d.client_id ?? null,
+            clientName: d.clientName ?? d.client_name ?? null,
+            clientPhone: d.clientPhone ?? d.client_phone ?? null,
+
+            category: normalizeCategory(
+              d.category ?? d.deviceType ?? d.type ?? 'PHONE',
+            ),
+
             lastLat: lat,
             lastLng: lng,
-            lastSeenAt:
-              d.lastSeen ??
-              d.lastSeenIso ??
-              d.updatedAt ??
-              d.lastHeartbeat ??
-              null,
-            lastHeartbeatAt: d.lastHeartbeat ?? d.lastSeen ?? null,
+            lastSeenAt: lastSeen,
+            lastHeartbeatAt: lastHb,
+
+            gpsAccuracy,
             batteryLevel: battery,
-            gpsAccuracy:
-              typeof gpsAcc === 'number'
-                ? gpsAcc
-                : gpsAcc != null
-                ? Number(gpsAcc)
-                : null,
-            networkType: d.networkType ?? d.network ?? undefined,
-            ip: d.ip ?? undefined,
-            isOnline: !!online,
-          } as Device;
+            networkType: d.networkType ?? d.network ?? null,
+            ip: d.ip ?? null,
+
+            isOnline: !!rawOnline,
+          };
         })
         .filter(Boolean) as Device[];
 
@@ -227,7 +345,7 @@ export default function AntiTheftDashboard() {
     }
   }
 
-  // -------- API: envoi des commandes antivol (via route Next locale) --------
+  // -------- Envoi commandes antivol --------
 
   async function sendCommand(action: CommandAction) {
     if (!selected) return;
@@ -238,7 +356,6 @@ export default function AntiTheftDashboard() {
       setErrorMessage(null);
 
       const payload = {
-        apiKey: 'YGC-ADMIN',
         deviceId: selected.id,
         action,
         message:
@@ -280,6 +397,8 @@ export default function AntiTheftDashboard() {
     }
   }
 
+  // -------- Mémos --------
+
   const phoneDevices = useMemo(
     () => devices.filter((d) => d.category === 'PHONE'),
     [devices],
@@ -295,7 +414,9 @@ export default function AntiTheftDashboard() {
       ? [selected.lastLat, selected.lastLng]
       : OUAGADOUGOU_CENTER;
 
-  // -------- Rendu --------
+  // ----------------------------
+  //  Rendu
+  // ----------------------------
 
   return (
     <div className="flex h-[calc(100vh-64px)] bg-slate-950 text-slate-50">
@@ -318,45 +439,59 @@ export default function AntiTheftDashboard() {
               <Marker
                 key={d.id}
                 position={[d.lastLat as number, d.lastLng as number]}
+                icon={createDeviceIcon(d)}
                 eventHandlers={{
                   click: () => setSelected(d),
                 }}
               >
                 <Popup>
-                  <div className="text-xs">
-                    <div className="font-semibold text-sm mb-1">
-                      {d.label}
+                  {/* Popup pro détaillé */}
+                  <div className="text-xs text-slate-900 min-w-[260px] max-w-[320px]">
+                    <div className="flex items-start justify-between gap-3 mb-1">
+                      <div>
+                        <div className="text-sm font-semibold">
+                          {d.label}
+                        </div>
+                        {d.clientName && (
+                          <div className="text-[11px] text-slate-500">
+                            {d.clientName}
+                          </div>
+                        )}
+                        {d.clientId && (
+                          <div className="text-[11px] text-slate-400">
+                            ID client : {d.clientId}
+                          </div>
+                        )}
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          d.isOnline
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {d.isOnline ? 'EN LIGNE' : 'HORS LIGNE'}
+                      </span>
                     </div>
-                    {d.clientName && (
-                      <div className="text-[11px] text-slate-500">
-                        Client : {d.clientName}
-                      </div>
-                    )}
-                    {d.clientPhone && (
-                      <div className="text-[11px] text-slate-500">
-                        Tel : {d.clientPhone}
-                      </div>
-                    )}
 
-                    <hr className="my-1 border-slate-700" />
+                    <div className="border-t border-slate-200 my-2" />
 
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 mb-2">
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Dernier signal
+                          DERNIER SIGNAL
                         </div>
                         <div>{formatDate(d.lastSeenAt)}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Dernier heartbeat
+                          DERNIER HEARTBEAT
                         </div>
                         <div>{formatDate(d.lastHeartbeatAt)}</div>
                       </div>
-
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Batterie
+                          BATTERIE
                         </div>
                         <div>
                           {d.batteryLevel != null
@@ -366,7 +501,7 @@ export default function AntiTheftDashboard() {
                       </div>
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Précision GPS
+                          PRÉCISION GPS
                         </div>
                         <div>
                           {d.gpsAccuracy != null
@@ -374,38 +509,49 @@ export default function AntiTheftDashboard() {
                             : '—'}
                         </div>
                       </div>
-
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Lat / Lng
+                          LAT / LNG
                         </div>
                         <div>
-                          {d.lastLat?.toFixed(5)} / {d.lastLng?.toFixed(5)}
+                          {d.lastLat?.toFixed(5)} /{' '}
+                          {d.lastLng?.toFixed(5)}
                         </div>
                       </div>
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Réseau
+                          RÉSEAU
                         </div>
                         <div>{d.networkType ?? '—'}</div>
                       </div>
-
-                      <div>
-                        <div className="text-[10px] text-slate-500">IP</div>
-                        <div>{d.ip ?? '—'}</div>
-                      </div>
                       <div>
                         <div className="text-[10px] text-slate-500">
-                          Statut
+                          IP
                         </div>
-                        <div
-                          className={
-                            d.isOnline ? 'text-emerald-400' : 'text-slate-400'
-                          }
-                        >
-                          {d.isOnline ? 'En ligne' : 'Hors ligne'}
-                        </div>
+                        <div>{d.ip ?? '—'}</div>
                       </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 my-2" />
+
+                    <div className="text-[10px] text-slate-500 mb-1">
+                      ACTIONS RAPIDES
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelected(d)}
+                        className="flex-1 rounded-full border border-amber-400 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100"
+                      >
+                        🔔 Faire sonner
+                      </button>
+                      <button
+                        type="button"
+                        disabled
+                        className="flex-1 rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-400"
+                      >
+                        🚨 Mode perdu
+                      </button>
                     </div>
                   </div>
                 </Popup>
@@ -438,7 +584,7 @@ export default function AntiTheftDashboard() {
       </div>
 
       {/* 🧰 Panneau latéral Antivol */}
-      <div className="w-96 border-l border-slate-800 bg-slate-900/80 backdrop-blur-xl px-4 py-5 flex flex-col gap-4">
+      <div className="flex w-96 flex-col gap-4 border-l border-slate-800 bg-slate-900/80 px-4 py-5 backdrop-blur-xl">
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
             SahelGuard • Antivol
@@ -447,8 +593,8 @@ export default function AntiTheftDashboard() {
             Dashboard GuardCloud
           </div>
           <div className="mt-1 text-xs text-slate-400">
-            Sélectionne un téléphone sur la carte pour envoyer des commandes
-            anti-vol en temps quasi réel.
+            Sélectionne un téléphone sur la carte pour envoyer des
+            commandes anti-vol en temps quasi réel.
           </div>
         </div>
 
@@ -466,9 +612,9 @@ export default function AntiTheftDashboard() {
                       {selected.clientName}
                     </div>
                   )}
-                  {selected.clientPhone && (
-                    <div className="text-xs text-slate-500">
-                      {selected.clientPhone}
+                  {selected.clientId && (
+                    <div className="text-[11px] text-slate-500">
+                      ID client : {selected.clientId}
                     </div>
                   )}
                 </div>
@@ -483,11 +629,20 @@ export default function AntiTheftDashboard() {
                 </div>
               </div>
 
-              <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300">
                 <div>
-                  <span className="text-slate-500">Dernier signal :</span>
+                  <span className="text-slate-500">
+                    Dernier signal :
+                  </span>
                   <br />
                   {formatDate(selected.lastSeenAt)}
+                </div>
+                <div>
+                  <span className="text-slate-500">
+                    Dernier heartbeat :
+                  </span>
+                  <br />
+                  {formatDate(selected.lastHeartbeatAt)}
                 </div>
                 <div>
                   <span className="text-slate-500">Batterie :</span>
@@ -497,21 +652,19 @@ export default function AntiTheftDashboard() {
                     : '—'}
                 </div>
                 <div>
-                  <span className="text-slate-500">Coordonnées :</span>
+                  <span className="text-slate-500">
+                    Coordonnées :
+                  </span>
                   <br />
                   {selected.lastLat?.toFixed(5)} /{' '}
                   {selected.lastLng?.toFixed(5)}
-                </div>
-                <div>
-                  <span className="text-slate-500">Réseau :</span>
-                  <br />
-                  {selected.networkType ?? '—'}
                 </div>
               </div>
             </>
           ) : (
             <div className="text-sm text-slate-400">
-              Aucun téléphone sélectionné. Clique sur un marker sur la carte.
+              Aucun téléphone sélectionné. Clique sur un marker sur la
+              carte.
             </div>
           )}
         </div>
@@ -559,8 +712,8 @@ export default function AntiTheftDashboard() {
         )}
 
         <div className="mt-auto text-[11px] text-slate-500">
-          API GuardCloud v7 • Les commandes sont lues par SahelGuard via le
-          Heartbeat (RING, LOST_MODE, LOCK, etc.).
+          API GuardCloud v7 • Les commandes sont lues par SahelGuard via
+          le Heartbeat (RING, LOST_MODE, LOCK, etc.).
         </div>
       </div>
     </div>
