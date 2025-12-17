@@ -1,14 +1,15 @@
 // app/admin/clients/page.tsx
-import { AdminShell } from "@/components/AdminShell";
-import AuthGuard from "@/components/AuthGuard";
 import ClientsListClient from "./ClientsListClient";
 
+export const runtime = "edge";          // optionnel
+export const dynamic = "force-dynamic"; // ✅ évite le prerender au build
+export const revalidate = 0;            // ✅ pas de cache SSG
+
 export default function ClientsPage() {
+  // ✅ Server Component: zéro window ici
   return (
-    <AuthGuard>
-      <AdminShell>
-        <ClientsListClient />
-      </AdminShell>
-    </AuthGuard>
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <ClientsListClient />
+    </div>
   );
 }

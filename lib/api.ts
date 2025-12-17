@@ -1,10 +1,9 @@
 // lib/api.ts
-
 export interface GuardCloudDevice {
   deviceId: string;
   hardwareId?: string;
   type?: string;
-  category?: string; // "PHONE" | "PC" | ...
+  category?: string;
   name?: string;
   clientId?: string;
   clientName?: string;
@@ -28,40 +27,51 @@ export interface Reseller {
   createdAt?: string;
 }
 
-const DEFAULT_API_BASE =
-  process.env.NODE_ENV === "development"
-    ? "http://127.0.0.1:8787"
-    : "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
+// ✅ IMPORTANT: on utilise les routes Next-on-Pages (Edge) en relatif
+export const APP_API_BASE = "/api";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE || DEFAULT_API_BASE;
+// -------- ADMIN LOGIN (via Next) --------
+export type LoginResponse = {
+  ok: boolean;
+  token?: string;
+  role?: string;
+  error?: string;
+};
 
-console.log("🔌 GuardCloud API_BASE =", API_BASE);
+export async function adminLogin(login: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${APP_API_BASE}/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ login, password }),
+  });
 
-// -------- DEVICES --------
+  const data = (await res.json().catch(() => null)) as LoginResponse | null;
 
+  if (!res.ok || !data?.ok || !data.token) {
+    throw new Error(data?.error || `http_${res.status}`);
+  }
+
+  return data;
+}
+
+// -------- DEVICES (via Next proxy) --------
 export async function fetchAdminDevices(): Promise<GuardCloudDevice[]> {
-  const res = await fetch(`${API_BASE}/map/devices`, { cache: "no-store" });
+  const res = await fetch(`${APP_API_BASE}/devices`, { cache: "no-store" });
   if (!res.ok) throw new Error("map_devices_failed");
   const data = await res.json();
   return (data.devices || []) as GuardCloudDevice[];
 }
 
-export async function fetchClientDevices(
-  clientId: string
-): Promise<GuardCloudDevice[]> {
-  const url = `${API_BASE}/client/devices?clientId=${encodeURIComponent(
-    clientId
-  )}`;
-  const res = await fetch(url, { cache: "no-store" });
+export async function fetchClientDevices(clientId: string): Promise<GuardCloudDevice[]> {
+  const res = await fetch(`${APP_API_BASE}/devices?clientId=${encodeURIComponent(clientId)}`, {
+    cache: "no-store",
+  });
   if (!res.ok) throw new Error("client_devices_failed");
   const data = await res.json();
   return (data.devices || []) as GuardCloudDevice[];
 }
 
-export async function fetchResellerDevices(
-  resellerId: string
-): Promise<GuardCloudDevice[]> {
+export async function fetchResellerDevices(resellerId: string): Promise<GuardCloudDevice[]> {
   const all = await fetchAdminDevices();
   return all.filter(
     (d) =>
@@ -70,23 +80,18 @@ export async function fetchResellerDevices(
   );
 }
 
-// -------- ADMIN RESELLERS --------
-
-export async function fetchAdminResellers(
-  adminToken: string
-): Promise<Reseller[]> {
-  const res = await fetch(`${API_BASE}/admin/resellers/list`, {
+// -------- ADMIN RESELLERS (via Next proxy) --------
+export async function fetchAdminResellers(adminJwt: string): Promise<Reseller[]> {
+  const res = await fetch(`${APP_API_BASE}/admin/resellers`, {
     method: "GET",
     headers: {
-      "x-api-key": adminToken,
+      // ✅ on envoie le JWT (pas x-api-key)
+      Authorization: `Bearer ${adminJwt}`,
     },
     cache: "no-store",
   });
 
-  if (!res.ok) {
-    throw new Error("resellers_list_failed");
-  }
-
+  if (!res.ok) throw new Error(`resellers_failed_${res.status}`);
   const data = await res.json();
   return (data.items || []) as Reseller[];
 }
