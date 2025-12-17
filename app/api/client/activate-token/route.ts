@@ -1,3 +1,5 @@
+export const runtime = 'edge';
+
 // app/api/client/activate-token/route.ts
 import { NextRequest, NextResponse } from "next/server";
 

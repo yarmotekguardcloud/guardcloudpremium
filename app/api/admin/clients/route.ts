@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+
+export const runtime = 'edge';
+
 const API_BASE =
   process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
   "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
