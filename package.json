@@ -10,7 +10,6 @@
     "pages:deploy": "npm run pages:build && npx wrangler@latest pages deploy .vercel/output/static --project-name guardcloudpremium"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "^4.1.18",
     "jose": "^6.1.2",
     "leaflet": "^1.9.4",
     "next": "^15.5.9",

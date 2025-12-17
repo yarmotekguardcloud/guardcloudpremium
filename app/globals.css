@@ -1,7 +1,9 @@
 /* -------------------------------------------------------------
    TAILWIND BASE
 ------------------------------------------------------------- */
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* -------------------------------------------------------------
    LEAFLET CORE CSS (obligatoire pour la carte, les popups & zoom)
