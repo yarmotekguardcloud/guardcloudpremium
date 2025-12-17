@@ -1,60 +1,44 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-export const runtime = 'edge';
+async function forward(req: NextRequest, path: string) {
+  const base = (process.env.GC_WORKER_BASE || process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE || "").replace(/\/+$/, "");
+  const adminKey = process.env.GC_ADMIN_KEY || process.env.ADMIN_API_KEY;
 
-const API_BASE =
-  process.env.GUARDCLOUD_API_BASE ??
-  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
-  "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
+  if (!base) return NextResponse.json({ ok: false, error: "CONFIG_MISSING_GC_WORKER_BASE" }, { status: 500 });
+  if (!adminKey) return NextResponse.json({ ok: false, error: "CONFIG_MISSING_GC_ADMIN_KEY" }, { status: 500 });
 
-type CreateTokensPayload = {
-  count: number;
-  validityDays: number;
-  resellerId?: string | null;
-  batchLabel?: string | null;
-};
+  const url = new URL(req.url);
+  const target = `${base}${path}${url.search || ""}`;
 
-export async function POST(req: Request) {
-  try {
-    const payload = (await req.json()) as CreateTokensPayload;
+  const headers = new Headers();
+  headers.set("x-admin-key", adminKey);
 
-    // Proxy vers le Worker GuardCloud (à adapter si ton endpoint est différent)
-    const workerRes = await fetch(`${API_BASE}/admin/tokens/batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  const ct = req.headers.get("content-type");
+  if (ct) headers.set("content-type", ct);
 
-    const text = await workerRes.text();
+  const res = await fetch(target, {
+    method: req.method,
+    headers,
+    body: req.method === "POST" ? await req.text() : undefined,
+    cache: "no-store",
+  });
 
-    // 🔒 On s’assure que la réponse est bien du JSON
-    let json: any;
-    try {
-      json = JSON.parse(text);
-    } catch (e) {
-      console.error("Réponse non JSON du Worker /admin/tokens/batch:", text);
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Réponse invalide du service tokens (non JSON). Vérifier le Worker GuardCloud.",
-        },
-        { status: 502 },
-      );
-    }
-
-    return NextResponse.json(json, { status: workerRes.status });
-  } catch (e: any) {
-    console.error("Erreur interne route /api/admin/tokens:", e);
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          e?.message ??
-          "Erreur interne lors de la création du lot de tokens (route Next).",
-      },
-      { status: 500 },
-    );
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const data = await res.json().catch(() => ({ ok: false, error: "INVALID_JSON_FROM_WORKER" }));
+    return NextResponse.json(data, { status: res.status });
   }
+  const text = await res.text().catch(() => "");
+  return NextResponse.json({ ok: res.ok, status: res.status, body: text || null }, { status: res.status });
+}
+
+export async function GET(req: NextRequest) {
+  return forward(req, "/admin/tokens");
+}
+
+export async function POST(req: NextRequest) {
+  return forward(req, "/admin/tokens");
 }

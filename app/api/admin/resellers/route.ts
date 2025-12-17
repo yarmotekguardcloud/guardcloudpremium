@@ -1,59 +1,44 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-export const runtime = 'edge';
+async function forward(req: NextRequest, path: string) {
+  const base = (process.env.GC_WORKER_BASE || process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE || "").replace(/\/+$/, "");
+  const adminKey = process.env.GC_ADMIN_KEY || process.env.ADMIN_API_KEY;
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
-  "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
+  if (!base) return NextResponse.json({ ok: false, error: "CONFIG_MISSING_GC_WORKER_BASE" }, { status: 500 });
+  if (!adminKey) return NextResponse.json({ ok: false, error: "CONFIG_MISSING_GC_ADMIN_KEY" }, { status: 500 });
 
-const ADMIN_KEY = process.env.GUARDCLOUD_ADMIN_KEY ?? "YGC-ADMIN";
+  const url = new URL(req.url);
+  const target = `${base}${path}${url.search || ""}`;
 
-export async function GET() {
-  try {
-    const url = `${API_BASE}/admin/resellers`;
+  const headers = new Headers();
+  headers.set("x-admin-key", adminKey);
 
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-admin-key": ADMIN_KEY,
-      },
-      cache: "no-store",
-    });
+  const ct = req.headers.get("content-type");
+  if (ct) headers.set("content-type", ct);
 
-    const raw = await res.text();
+  const res = await fetch(target, {
+    method: req.method,
+    headers,
+    body: req.method === "POST" ? await req.text() : undefined,
+    cache: "no-store",
+  });
 
-    if (!res.ok) {
-      console.error("GuardCloud /admin/resellers HTTP error:", res.status, raw);
-      return NextResponse.json(
-        { ok: false, error: `HTTP ${res.status}` },
-        { status: 500 },
-      );
-    }
-
-    let data: any;
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      console.error("JSON invalide pour /admin/resellers", e, raw);
-      return NextResponse.json(
-        { ok: false, error: "Réponse JSON invalide du Worker" },
-        { status: 500 },
-      );
-    }
-
-    const items =
-      data.items ??
-      data.resellers ??
-      data.data ??
-      [];
-
-    return NextResponse.json({ ok: true, items });
-  } catch (err: any) {
-    console.error("Erreur /api/admin/resellers:", err);
-    return NextResponse.json(
-      { ok: false, error: err?.message ?? "Erreur interne" },
-      { status: 500 },
-    );
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const data = await res.json().catch(() => ({ ok: false, error: "INVALID_JSON_FROM_WORKER" }));
+    return NextResponse.json(data, { status: res.status });
   }
+  const text = await res.text().catch(() => "");
+  return NextResponse.json({ ok: res.ok, status: res.status, body: text || null }, { status: res.status });
+}
+
+export async function GET(req: NextRequest) {
+  return forward(req, "/admin/resellers");
+}
+
+export async function POST(req: NextRequest) {
+  return forward(req, "/admin/resellers");
 }
