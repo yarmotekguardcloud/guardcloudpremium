@@ -1,22 +1,57 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRequestContext } from "@cloudflare/next-on-pages";
 
 export const runtime = "edge";
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_GUARDCLOUD_API_BASE ??
+  "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
+
 export async function POST(req: NextRequest) {
-  // ✅ IMPORTANT: getRequestContext() UNIQUEMENT ici (jamais top-level)
-  const { env } = getRequestContext();
+  try {
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json(
+        { ok: false, error: "INVALID_JSON" },
+        { status: 400 }
+      );
+    }
 
-  // ⚠️ Exemple: on lit le JSON dans le handler
-  const body = await req.json().catch(() => null);
-  if (!body) return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+    // Proxy vers le backend Worker (source de vérité)
+    const res = await fetch(`${API_BASE}/client/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      // Edge-friendly
+      cache: "no-store",
+    });
 
-  // TODO: ta logique d’activation ici (KV, etc.) en utilisant `env`
-  // ex: await env.CLIENTS_KV.put(...)
+    const text = await res.text();
+    let data: any = null;
 
-  return NextResponse.json({ ok: true });
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "INVALID_BACKEND_JSON",
+          status: res.status,
+          raw: text?.slice?.(0, 2000) ?? "",
+        },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json(data ?? { ok: true }, { status: res.status });
+  } catch (e) {
+    console.error("ACTIVATE_FAILED", e);
+    return NextResponse.json(
+      { ok: false, error: "ACTIVATE_FAILED" },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: false, error: "Use POST" }, { status: 405 });
+  return NextResponse.json({ ok: false, error: "USE_POST" }, { status: 405 });
 }
