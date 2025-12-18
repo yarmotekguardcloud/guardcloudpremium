@@ -1,0 +1,173 @@
+﻿diff --git a/app/api/_gc.ts b/app/api/_gc.ts
+new file mode 100644
+index 0000000..d9d9e9a
+--- /dev/null
++++ b/app/api/_gc.ts
+@@ -0,0 +1 @@
++export { proxyToWorker, OPTIONS } from "./_lib/gcAdminProxy";
+diff --git a/app/api/_session.ts b/app/api/_session.ts
+new file mode 100644
+index 0000000..c3a6d8a
+--- /dev/null
++++ b/app/api/_session.ts
+@@ -0,0 +1,172 @@
++const encoder = new TextEncoder();
++
++export function cookieName() {
++  return "gc_admin_session";
++}
++
++// ---------- base64url helpers (Edge + Node build safe) ----------
++function b64urlFromBytes(bytes: Uint8Array): string {
++  // Node (build)
++  // @ts-ignore
++  if (typeof Buffer !== "undefined") {
++    // @ts-ignore
++    return Buffer.from(bytes)
++      .toString("base64")
++      .replace(/\+/g, "-")
++      .replace(/\//g, "_")
++      .replace(/=+$/g, "");
++  }
++  // Edge runtime
++  let bin = "";
++  for (const b of bytes) bin += String.fromCharCode(b);
++  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
++}
++
++function bytesFromB64url(s: string): Uint8Array {
++  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4);
++  // Node (build)
++  // @ts-ignore
++  if (typeof Buffer !== "undefined") {
++    // @ts-ignore
++    return new Uint8Array(Buffer.from(b64, "base64"));
++  }
++  // Edge runtime
++  const bin = atob(b64);
++  const out = new Uint8Array(bin.length);
++  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
++  return out;
++}
++
++function safeJsonParse<T>(s: string): T | null {
++  try {
++    return JSON.parse(s) as T;
++  } catch {
++    return null;
++  }
++}
++
++function timingSafeEqual(a: string, b: string) {
++  if (a.length !== b.length) return false;
++  let r = 0;
++  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
++  return r === 0;
++}
++
++function getSecret(): string | null {
++  const s = (process.env as any)?.GC_SESSION_SECRET;
++  return typeof s === "string" && s.length >= 16 ? s : null;
++}
++
++async function hmacSign(secret: string, data: string): Promise<string> {
++  const key = await crypto.subtle.importKey(
++    "raw",
++    encoder.encode(secret),
++    { name: "HMAC", hash: "SHA-256" },
++    false,
++    ["sign"]
++  );
++  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
++  return b64urlFromBytes(new Uint8Array(sig));
++}
++
++// value = "<payloadB64url>.<sigB64url>"
++export async function verifySessionCookie(value?: string | null): Promise<boolean> {
++  const secret = getSecret();
++  if (!secret || !value) return false;
++
++  const parts = value.split(".");
++  if (parts.length !== 2) return false;
++  const [payloadB64, sigB64] = parts;
++
++  const expected = await hmacSign(secret, payloadB64);
++  if (!timingSafeEqual(expected, sigB64)) return false;
++
++  const payloadBytes = bytesFromB64url(payloadB64);
++  const payloadStr = new TextDecoder().decode(payloadBytes);
++  const payload = safeJsonParse<{ exp?: number }>(payloadStr);
++  if (!payload?.exp || typeof payload.exp !== "number") return false;
++
++  const now = Math.floor(Date.now() / 1000);
++  if (payload.exp < now) return false;
++
++  return true;
++}
++
++export async function makeSessionCookie(
++  login: string = "YGC-ADMIN",
++  ttlSeconds: number = 60 * 60 * 12
++) {
++  const secret = getSecret();
++  if (!secret) {
++    // On préfère casser le login proprement (route.ts renverra 500)
++    throw new Error("GC_SESSION_SECRET_MISSING");
++  }
++
++  const now = Math.floor(Date.now() / 1000);
++  const payload = { v: 1, login, iat: now, exp: now + ttlSeconds };
++  const payloadB64 = b64urlFromBytes(encoder.encode(JSON.stringify(payload)));
++  const sigB64 = await hmacSign(secret, payloadB64);
++  const value = `${payloadB64}.${sigB64}`;
++
++  return {
++    name: cookieName(),
++    value,
++    options: {
++      httpOnly: true,
++      secure: true,
++      sameSite: "lax" as const,
++      path: "/",
++      maxAge: ttlSeconds,
++    },
++  };
++}
+diff --git a/app/api/admin/login/route.ts b/app/api/admin/login/route.ts
+index 2a6a111..7b2c7c0 100644
+--- a/app/api/admin/login/route.ts
++++ b/app/api/admin/login/route.ts
+@@ -1,24 +1,35 @@
+ import { NextResponse } from "next/server";
+ import { makeSessionCookie } from "../../_session";
+ 
+ export const runtime = "edge";
+ 
+ export async function POST(req: Request) {
+   const body = await req.json().catch(() => null);
+   const login = (body?.login ?? "").toString().trim();
+   const password = (body?.password ?? "").toString();
+ 
+   const ok =
+     login === (process.env.GC_ADMIN_LOGIN || "YGC-ADMIN") &&
+     password === (process.env.GC_ADMIN_PASSWORD || "");
+ 
+   if (!ok) return NextResponse.json({ ok: false, error: "INVALID_CREDENTIALS" }, { status: 401 });
+ 
+-  const c = await makeSessionCookie();
++  if (!process.env.GC_SESSION_SECRET) {
++    return NextResponse.json(
++      { ok: false, error: "GC_SESSION_SECRET_MISSING" },
++      { status: 500 }
++    );
++  }
++
++  const c = await makeSessionCookie(login || "YGC-ADMIN");
+   const res = NextResponse.json({ ok: true });
+   res.cookies.set(c.name, c.value, c.options);
+   return res;
+ }
+ 
+ export async function GET() {
+   return NextResponse.json({ ok: false, error: "Use POST" }, { status: 405 });
+ }
