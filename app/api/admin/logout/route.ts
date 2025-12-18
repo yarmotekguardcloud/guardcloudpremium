@@ -25,3 +25,15 @@ export async function OPTIONS() {
     },
   });
 }
+
+// ---- Backward compatible exports (legacy imports) ----
+export const OPTIONS = adminOptions;
+export function proxyToWorker(
+  req: Request,
+  path: string,
+  extraHeaders: Record<string, string> = {}
+) {
+  return adminProxy(req, path, extraHeaders);
+}
+
+
