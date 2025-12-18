@@ -1,94 +1,118 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { cookieName, verifySessionCookie } from "../_session";
 
-function getEnv(name: string): string | undefined {
-  // Next on Pages/Edge: process.env peut être vide en build, donc on tolère
-  // et on sappuie surtout sur variables Cloudflare injectées à runtime.
-  // Sur Pages Functions, process.env est souvent dispo à runtime aussi.
-  return (process.env as any)?.[name];
+type ExtraHeaders = Record<string, string>;
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, x-admin-key, x-api-key, x-admin-token",
+    "Access-Control-Allow-Methods":
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+  };
 }
 
-function joinUrl(base: string, path: string, req: NextRequest) {
-  const b = base.replace(/\/+$/, "");
-  const p = path.startsWith("/") ? path : `/${path}`;
-  const u = new URL(req.url);
-  return `${b}${p}${u.search || ""}`;
-}
+/**
+ * adminProxy(req, "/admin/xxx")
+ * - Next 15: cookies() est async
+ * - Injecte x-admin-key (GC_ADMIN_KEY)
+ * - Proxy vers le Worker (GC_WORKER_BASE)
+ * - Passthrough status (404 reste 404)
+ */
+export async function adminProxy(
+  req: Request,
+  path: string,
+  extraHeaders: ExtraHeaders = {}
+) {
+  const store = await cookies(); // âœ… Next 15: async
+  const ok = await verifySessionCookie(store.get(cookieName())?.value);
 
-function pickForwardHeaders(req: NextRequest, extra?: Record<string, string>) {
-  const h = new Headers();
-  const ct = req.headers.get("content-type");
-  const auth = req.headers.get("authorization");
-  if (ct) h.set("content-type", ct);
-  if (auth) h.set("authorization", auth);
-
-  // Admin key
-  const adminKey = getEnv("GC_ADMIN_KEY");
-  if (adminKey) h.set("x-admin-key", adminKey);
-
-  // Optionnel: token admin si tu en utilises un côté worker
-  const adminToken = req.headers.get("x-admin-token");
-  if (adminToken) h.set("x-admin-token", adminToken);
-
-  if (extra) {
-    for (const [k, v] of Object.entries(extra)) h.set(k, v);
+  if (!ok) {
+    return new Response(JSON.stringify({ ok: false, error: "UNAUTHORIZED" }), {
+      status: 401,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        ...corsHeaders(),
+      },
+    });
   }
-  return h;
-}
 
-async function safeJson(res: Response) {
-  const text = await res.text();
-  try {
-    return { ok: true, data: JSON.parse(text), raw: text };
-  } catch {
-    return { ok: false, data: null as any, raw: text };
+  const base = (process.env.GC_WORKER_BASE || "").replace(/\/$/, "");
+  if (!base) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "GC_WORKER_BASE_MISSING" }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          ...corsHeaders(),
+        },
+      }
+    );
   }
-}
 
-export async function proxyToWorker(req: NextRequest, workerPath: string) {
-  const base = getEnv("GC_WORKER_BASE") || "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
-  const url = joinUrl(base, workerPath, req);
+  const adminKey = process.env.GC_ADMIN_KEY || "";
+  if (!adminKey) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "GC_ADMIN_KEY_MISSING" }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          ...corsHeaders(),
+        },
+      }
+    );
+  }
+
+  const url = new URL(req.url);
+  const target = `${base}${path}${url.search ?? ""}`;
 
   const method = req.method.toUpperCase();
-  const hasBody = method !== "GET" && method !== "HEAD";
-  const body = hasBody ? await req.arrayBuffer().catch(() => undefined) : undefined;
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(url, {
-      method,
-      headers: pickForwardHeaders(req),
-      body: body as any,
-      cache: "no-store",
-    });
-  } catch (e) {
-    console.error("proxyToWorker fetch failed", e);
-    return NextResponse.json({ ok: false, error: "UPSTREAM_FETCH_FAILED" }, { status: 502 });
+  // Ne pas forward les cookies du navigateur vers le Worker
+  const headers = new Headers();
+
+  const ct = req.headers.get("content-type");
+  if (ct) headers.set("content-type", ct);
+
+  const accept = req.headers.get("accept");
+  if (accept) headers.set("accept", accept);
+
+  const xApiKey = req.headers.get("x-api-key");
+  if (xApiKey) headers.set("x-api-key", xApiKey);
+
+  const xAdminToken = req.headers.get("x-admin-token");
+  if (xAdminToken) headers.set("x-admin-token", xAdminToken);
+
+  headers.set("x-admin-key", adminKey);
+
+  for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
+
+  const init: RequestInit = { method, headers };
+
+  if (!["GET", "HEAD"].includes(method)) {
+    const body = await req.arrayBuffer().catch(() => null);
+    if (body) init.body = body;
   }
 
-  const parsed = await safeJson(upstream);
+  const resp = await fetch(target, init);
 
-  // Si upstream répond JSON, on renvoie JSON ; sinon on renvoie le raw en wrap
-  if (parsed.ok) {
-    return NextResponse.json(parsed.data, { status: upstream.status });
+  const outHeaders = new Headers(resp.headers);
+  for (const [k, v] of Object.entries(corsHeaders())) outHeaders.set(k, v);
+
+  if (!outHeaders.get("content-type")) {
+    outHeaders.set("content-type", "application/json; charset=utf-8");
   }
-  return NextResponse.json(
-    {
-      ok: false,
-      error: upstream.ok ? "UPSTREAM_NON_JSON" : `HTTP ${upstream.status}`,
-      raw: parsed.raw?.slice(0, 2000),
-    },
-    { status: upstream.ok ? 502 : upstream.status }
-  );
+
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: outHeaders,
+  });
 }
 
-// Preflight CORS (si besoin)
-export function OPTIONS() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-admin-key, x-admin-token",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    },
-  });
+export function adminOptions() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
 }
