@@ -1,53 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Ces deux lignes sont CRITIQUES pour Cloudflare Pages
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
-const TARGET_PATH = "/admin/device-history";
 const DEFAULT_API_BASE = "https://yarmotek-guardcloud-api.myarbanga.workers.dev";
 
-function getHeaders() {
-  const adminKey = process.env.GUARDCLOUD_ADMIN_KEY;
-  return {
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-    ...(adminKey ? { "x-admin-key": adminKey } : {}),
-  };
-}
-
-async function handleRequest(req: NextRequest) {
+export async function GET(req: NextRequest) {
   const API_BASE = process.env.GUARDCLOUD_API_BASE || DEFAULT_API_BASE;
-  const url = new URL(TARGET_PATH, API_BASE);
+  const adminKey = process.env.GUARDCLOUD_ADMIN_KEY;
+  
+  const url = new URL("/admin/device-history", API_BASE);
   const { searchParams } = new URL(req.url);
   url.search = searchParams.toString();
 
   try {
-    const method = req.method;
-    const body = (method !== "GET" && method !== "HEAD") ? await req.text() : undefined;
     const res = await fetch(url.toString(), {
-      method,
-      headers: getHeaders(),
-      body,
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(adminKey ? { "x-admin-key": adminKey } : {}),
+      },
       cache: "no-store",
     });
-    const data = await res.text();
-    let json;
-    try { json = JSON.parse(data); } catch { json = { data }; }
-    return NextResponse.json(json, { status: res.status });
+
+    const data = await res.json();
+    return NextResponse.json(data);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }
 }
 
-export const GET = (req: NextRequest) => handleRequest(req);
-export const POST = (req: NextRequest) => handleRequest(req);
-export async function OPTIONS() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-admin-key",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    },
-  });
+// Ajoutez POST si nécessaire, sinon laissez juste GET
+export async function POST(req: NextRequest) {
+  const API_BASE = process.env.GUARDCLOUD_API_BASE || DEFAULT_API_BASE;
+  const adminKey = process.env.GUARDCLOUD_ADMIN_KEY;
+  const body = await req.text();
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/device-history`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(adminKey ? { "x-admin-key": adminKey } : {}),
+      },
+      body,
+    });
+    const data = await res.json();
+    return NextResponse.json(data);
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+  }
 }
