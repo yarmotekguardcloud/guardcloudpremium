@@ -2,23 +2,17 @@ import { NextResponse } from "next/server";
 import { cookieName, makeSessionCookie } from "../../_session";
 
 export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-// 1. Vos fonctions logiques personnalisées
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const login = (body?.login ?? "").toString().trim();
   const password = (body?.password ?? "").toString();
 
-  const ok =
-    login === (process.env.GC_ADMIN_LOGIN || "YGC-ADMIN") &&
-    password === (process.env.GC_ADMIN_PASSWORD || "");
+  const ok = login === (process.env.GC_ADMIN_LOGIN || "YGC-ADMIN") && 
+             password === (process.env.GC_ADMIN_PASSWORD || "");
 
-  if (!ok) {
-    return NextResponse.json(
-      { ok: false, error: "INVALID_CREDENTIALS" },
-      { status: 401 }
-    );
-  }
+  if (!ok) return NextResponse.json({ ok: false, error: "INVALID_CREDENTIALS" }, { status: 401 });
 
   const cookieValue = await makeSessionCookie(login);
   const res = NextResponse.json({ ok: true });
@@ -35,8 +29,5 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  return NextResponse.json(
-    { ok: false, error: "Use POST" },
-    { status: 405 }
-  );
+  return NextResponse.json({ ok: false, error: "Use POST" }, { status: 405 });
 }
