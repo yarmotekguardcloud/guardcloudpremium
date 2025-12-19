@@ -1,0 +1,5 @@
+﻿.next/cache/
+.next/cache/**
+node_modules/
+.git/
+*.log

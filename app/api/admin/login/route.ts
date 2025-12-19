@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { makeSessionCookie } from "../../_session";
+import { cookieName, makeSessionCookie } from "../../_session";
 
 export const runtime = "edge";
 
+// 1. Vos fonctions logiques personnalisées
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
   const login = (body?.login ?? "").toString().trim();
@@ -12,14 +13,36 @@ export async function POST(req: Request) {
     login === (process.env.GC_ADMIN_LOGIN || "YGC-ADMIN") &&
     password === (process.env.GC_ADMIN_PASSWORD || "");
 
-  if (!ok) return NextResponse.json({ ok: false, error: "INVALID_CREDENTIALS" }, { status: 401 });
+  if (!ok) {
+    return NextResponse.json(
+      { ok: false, error: "INVALID_CREDENTIALS" },
+      { status: 401 }
+    );
+  }
 
-  const c = await makeSessionCookie();
+  const cookieValue = await makeSessionCookie(login);
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(c.name, c.value, c.options);
+  
+  res.cookies.set(cookieName, cookieValue, {
+    httpOnly: true,
+    secure: true, 
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 12, 
+    path: '/'
+  });
+
   return res;
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: false, error: "Use POST" }, { status: 405 });
+  return NextResponse.json(
+    { ok: false, error: "Use POST" },
+    { status: 405 }
+  );
 }
+
+// 2. Exportation du proxy SANS OPTIONS (pour éviter le conflit)
+// Si vous avez absolument besoin du proxy, importez seulement ce qui ne crée pas de doublon.
+export { proxyToWorker } from "./_lib/gcAdminProxy";
+
+// NOTE: Si le build échoue encore, vérifiez que le fichier ./_lib/gcAdminProxy existe bien.
