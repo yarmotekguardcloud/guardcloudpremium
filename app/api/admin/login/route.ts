@@ -40,9 +40,3 @@ export async function GET() {
     { status: 405 }
   );
 }
-
-// 2. Exportation du proxy SANS OPTIONS (pour éviter le conflit)
-// Si vous avez absolument besoin du proxy, importez seulement ce qui ne crée pas de doublon.
-export { proxyToWorker } from "./_lib/gcAdminProxy";
-
-// NOTE: Si le build échoue encore, vérifiez que le fichier ./_lib/gcAdminProxy existe bien.
